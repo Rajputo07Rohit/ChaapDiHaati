@@ -1,0 +1,10 @@
+node_modules/
+dist/
+backend/data/
+!backend/data/.gitkeep
+backups/
+.env
+.env.local
+*.log
+.DS_Store
+backend/tests/.test.db*

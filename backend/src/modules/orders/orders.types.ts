@@ -1,0 +1,41 @@
+export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
+export type OrderStatus = "DRAFT" | "CONFIRMED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED" | "REFUNDED";
+export type KitchenStatus = "NOT_SENT" | "PREPARING" | "READY" | "SERVED";
+export type PriceType = "HALF" | "FULL" | "SINGLE";
+export type DiscountType = "FLAT" | "PERCENTAGE";
+
+export interface OrderItemInput {
+  menuItemId: string;
+  priceType: PriceType;
+  quantity: number;
+  specialInstructions?: string;
+  /** Per-item discount. FLAT is paise; PERCENTAGE is 0-100. Defaults to no discount. */
+  discountType?: DiscountType;
+  discountValue?: number;
+}
+
+export interface CreateOrderInput {
+  orderType: OrderType;
+  customerName?: string;
+  customerPhone?: string;
+  items: OrderItemInput[];
+  /** Order-level discount, applied on top of (subtotal - item discounts). FLAT is paise; PERCENTAGE is 0-100. */
+  discountType?: DiscountType;
+  discountValue?: number;
+  discountReason?: string;
+  notes?: string;
+  businessDate?: string;
+  asDraft?: boolean;
+}
+
+export interface PaymentInput {
+  paymentMethodId: string;
+  amountPaise: number;
+  reference?: string;
+}
+
+export interface CompleteOrderInput {
+  payments: PaymentInput[];
+  allowNegativeStock?: boolean;
+  overrideReason?: string;
+}

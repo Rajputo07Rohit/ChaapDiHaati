@@ -1,0 +1,61 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import { useAuth } from "./context/AuthContext";
+import { Layout } from "./components/Layout";
+import { Login } from "./pages/Login";
+import { Dashboard } from "./pages/Dashboard";
+import { POS } from "./pages/POS";
+import { Orders } from "./pages/Orders";
+import { Menu } from "./pages/Menu";
+import { Inventory } from "./pages/Inventory";
+import { Purchases } from "./pages/Purchases";
+import { Expenses } from "./pages/Expenses";
+import { Sales } from "./pages/Sales";
+import { CashBank } from "./pages/CashBank";
+import { ProfitLoss } from "./pages/ProfitLoss";
+import { DailyClosing } from "./pages/DailyClosing";
+import { Reports } from "./pages/Reports";
+import { Staff } from "./pages/Staff";
+import { SettingsPage } from "./pages/Settings";
+import { AuditLog } from "./pages/AuditLog";
+import { Role } from "./api/types";
+
+function RequireAuth({ children, roles }: { children: JSX.Element; roles?: Role[] }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/pos" replace />;
+  return children;
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        element={
+          <RequireAuth>
+            <Layout />
+          </RequireAuth>
+        }
+      >
+        <Route path="/dashboard" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Dashboard /></RequireAuth>} />
+        <Route path="/pos" element={<POS />} />
+        <Route path="/orders" element={<Orders />} />
+        <Route path="/menu" element={<Menu />} />
+        <Route path="/inventory" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Inventory /></RequireAuth>} />
+        <Route path="/purchases" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Purchases /></RequireAuth>} />
+        <Route path="/expenses" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Expenses /></RequireAuth>} />
+        <Route path="/sales" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Sales /></RequireAuth>} />
+        <Route path="/cash-bank" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><CashBank /></RequireAuth>} />
+        <Route path="/profit-loss" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><ProfitLoss /></RequireAuth>} />
+        <Route path="/daily-closing" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><DailyClosing /></RequireAuth>} />
+        <Route path="/reports" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Reports /></RequireAuth>} />
+        <Route path="/staff" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Staff /></RequireAuth>} />
+        <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
+        <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
+        <Route path="/" element={<Navigate to="/pos" replace />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/pos" replace />} />
+    </Routes>
+  );
+}

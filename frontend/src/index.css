@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-50: #fff7ed;
+  --brand-100: #ffedd5;
+  --brand-200: #fed7aa;
+  --brand-300: #fdba74;
+  --brand-400: #fb923c;
+  --brand-500: #f97316;
+  --brand-600: #ea580c;
+  --brand-700: #c2410c;
+  --brand-800: #9a3412;
+  --brand-900: #7c2d12;
+}
+
+/* Billing (black & white) theme — a stark, high-contrast look for the
+   counter, closer to a dedicated billing machine than a colorful dashboard.
+   Toggled from the sidebar; persisted per-browser in localStorage. */
+html.theme-mono {
+  --brand-50: #fafafa;
+  --brand-100: #e5e5e5;
+  --brand-200: #d4d4d4;
+  --brand-300: #a3a3a3;
+  --brand-400: #737373;
+  --brand-500: #404040;
+  --brand-600: #171717;
+  --brand-700: #000000;
+  --brand-800: #000000;
+  --brand-900: #000000;
+}
+html.theme-mono body { background: #ffffff; }
+html.theme-mono aside { background: #000000 !important; border-color: #000000 !important; }
+html.theme-mono .rounded-xl,
+html.theme-mono .rounded-lg,
+html.theme-mono .rounded { border-radius: 4px; }
+
+/* Dark theme — the sidebar is already a dark surface in every theme, so this
+   only needs to flip the main content area (currently light-gray page +
+   white cards + dark text) to its dark equivalents. Every rule below targets
+   an actual Tailwind utility class used somewhere in the app (checked via
+   grep), so nothing in the UI is left stranded in the wrong theme. */
+html.theme-dark body { background-color: #101319; color: #E7E9EE; }
+
+html.theme-dark .bg-white { background-color: #1B1F27; }
+html.theme-dark .bg-slate-50 { background-color: #101319; }
+html.theme-dark .bg-slate-100 { background-color: #262B35; }
+html.theme-dark .bg-slate-200 { background-color: #333A47; }
+html.theme-dark .bg-slate-300 { background-color: #454D5C; }
+
+html.theme-dark .border-slate-50 { border-color: #1F232B; }
+html.theme-dark .border-slate-100 { border-color: #262B35; }
+html.theme-dark .border-slate-200 { border-color: #333A47; }
+html.theme-dark .border-slate-300 { border-color: #454D5C; }
+html.theme-dark .divide-slate-50 > :not([hidden]) ~ :not([hidden]) { border-color: #1F232B; }
+html.theme-dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #262B35; }
+
+html.theme-dark .text-slate-900 { color: #F3F4F7; }
+html.theme-dark .text-slate-800 { color: #E4E6EB; }
+html.theme-dark .text-slate-700 { color: #CDD1D9; }
+html.theme-dark .text-slate-600 { color: #AEB4C0; }
+html.theme-dark .text-slate-500 { color: #8B92A2; }
+html.theme-dark .text-slate-400 { color: #767E90; }
+
+html.theme-dark .hover\:bg-slate-50:hover { background-color: #1F232B; }
+html.theme-dark .hover\:bg-slate-100:hover { background-color: #2B303B; }
+html.theme-dark .hover\:bg-slate-200:hover { background-color: #363E4B; }
+html.theme-dark .active\:bg-slate-200:active { background-color: #363E4B; }
+html.theme-dark .active\:bg-slate-300:active { background-color: #454D5C; }
+html.theme-dark .hover\:text-slate-600:hover { color: #CDD1D9; }
+
+html.theme-dark input,
+html.theme-dark select,
+html.theme-dark textarea { background-color: #1B1F27; color: #F3F4F7; }
+
+/* Status badges/pills use pale tints designed for a white card — darken the
+   tint and lighten the ink so they still read as the same status, not washed out. */
+html.theme-dark .bg-emerald-100 { background-color: #103823; }
+html.theme-dark .text-emerald-600 { color: #4ADE80; }
+html.theme-dark .text-emerald-700 { color: #6EE7A0; }
+html.theme-dark .bg-rose-100 { background-color: #3D1720; }
+html.theme-dark .bg-rose-50 { background-color: #331319; }
+html.theme-dark .text-rose-500 { color: #FB7185; }
+html.theme-dark .text-rose-600 { color: #F87171; }
+html.theme-dark .text-rose-700 { color: #FCA5A5; }
+html.theme-dark .bg-amber-100 { background-color: #3D2C08; }
+html.theme-dark .text-amber-600 { color: #FBBF24; }
+html.theme-dark .text-amber-700 { color: #FCD34D; }
+html.theme-dark .bg-blue-100 { background-color: #132A47; }
+html.theme-dark .text-blue-700 { color: #7FB4EF; }
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded-full;
+}
+
+/* Immediate, visible press feedback for touch/POS use (iPad, tablets) —
+   without this, a tap has no confirmation until the network request resolves. */
+.tap-btn {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition: transform 80ms ease, background-color 80ms ease;
+}
+.tap-btn:hover {
+  background-color: var(--brand-50);
+}
+.tap-btn:active {
+  transform: scale(0.96);
+  background-color: var(--brand-100);
+}
+
