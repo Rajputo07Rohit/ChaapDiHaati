@@ -9,7 +9,7 @@
 # Replace the target with your real Render backend URL after first deploy.
 [[redirects]]
   from = "/api/*"
-  to = "https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/api/:splat"
+  to = "https://chaapdihaati.onrender.com/api/:splat"
   status = 200
   force = true
 
