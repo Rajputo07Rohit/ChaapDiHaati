@@ -18,8 +18,8 @@ export function Login() {
     setError(null);
     setLoading(true);
     try {
-      await login(username, password);
-      navigate("/dashboard");
+      const loggedInUser = await login(username, password);
+      navigate(loggedInUser.role === "RIDER" ? "/rider" : "/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to log in. Please try again.");
     } finally {

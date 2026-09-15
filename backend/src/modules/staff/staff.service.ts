@@ -1,4 +1,4 @@
-import { db } from "../../db/connection";
+import { Staff, StaffDoc } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
 import { NotFoundError, ValidationError } from "../../utils/errors";
@@ -24,64 +24,74 @@ export interface StaffRow {
   salary_method: SalaryMethod;
   custom_days: number | null;
   joining_date: string;
-  active: number;
+  active: boolean;
   phone: string | null;
 }
 
-export function listStaff(activeOnly = false): StaffRow[] {
-  const sql = activeOnly
-    ? "SELECT * FROM staff WHERE active = 1 ORDER BY full_name"
-    : "SELECT * FROM staff ORDER BY full_name";
-  return db.prepare(sql).all() as StaffRow[];
+function toRow(doc: StaffDoc): StaffRow {
+  return {
+    id: doc._id,
+    full_name: doc.fullName,
+    role_title: doc.roleTitle,
+    salary_paise: doc.salaryPaise,
+    salary_method: doc.salaryMethod,
+    custom_days: doc.customDays,
+    joining_date: doc.joiningDate,
+    active: doc.active,
+    phone: doc.phone,
+  };
 }
 
-export function getStaffOrThrow(id: string): StaffRow {
-  const row = db.prepare("SELECT * FROM staff WHERE id = ?").get(id) as StaffRow | undefined;
-  if (!row) throw new NotFoundError("Staff member");
-  return row;
+export async function listStaff(activeOnly = false): Promise<StaffRow[]> {
+  const filter = activeOnly ? { active: true } : {};
+  const docs = await Staff.find(filter).sort({ fullName: 1 });
+  return docs.map(toRow);
 }
 
-export function createStaff(input: StaffInput, adminUserId: string): StaffRow {
+export async function getStaffOrThrow(id: string): Promise<StaffRow> {
+  const doc = await Staff.findById(id);
+  if (!doc) throw new NotFoundError("Staff member");
+  return toRow(doc);
+}
+
+export async function createStaff(input: StaffInput, adminUserId: string): Promise<StaffRow> {
   if (input.salaryPaise < 0) throw new ValidationError("Salary cannot be negative.");
   if (input.salaryMethod === "CUSTOM" && !input.customDays) {
     throw new ValidationError("Custom salary method requires the number of days.");
   }
   const id = newId("staff");
-  db.prepare(
-    `INSERT INTO staff (id, user_id, full_name, role_title, salary_paise, salary_method, custom_days, joining_date, phone, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    input.userId ?? null,
-    input.fullName,
-    input.roleTitle,
-    input.salaryPaise,
-    input.salaryMethod,
-    input.customDays ?? null,
-    input.joiningDate,
-    input.phone ?? null,
-    nowIso()
-  );
-  recordAudit({ userId: adminUserId, action: "STAFF_CREATED", entityType: "staff", entityId: id, newValue: input });
+  await Staff.create({
+    _id: id,
+    userId: input.userId ?? null,
+    fullName: input.fullName,
+    roleTitle: input.roleTitle,
+    salaryPaise: input.salaryPaise,
+    salaryMethod: input.salaryMethod,
+    customDays: input.customDays ?? null,
+    joiningDate: input.joiningDate,
+    phone: input.phone ?? null,
+    active: true,
+    createdAt: nowIso(),
+  });
+  await recordAudit({ userId: adminUserId, action: "STAFF_CREATED", entityType: "staff", entityId: id, newValue: input });
   return getStaffOrThrow(id);
 }
 
-export function updateStaff(id: string, changes: Partial<StaffInput> & { active?: boolean }, adminUserId: string): StaffRow {
-  const existing = getStaffOrThrow(id);
-  const merged = { ...existing, ...changes };
-  db.prepare(
-    `UPDATE staff SET full_name = ?, role_title = ?, salary_paise = ?, salary_method = ?, custom_days = ?, phone = ?, active = ? WHERE id = ?`
-  ).run(
-    merged.full_name,
-    merged.role_title,
-    merged.salary_paise,
-    merged.salary_method,
-    merged.custom_days ?? null,
-    merged.phone ?? null,
-    changes.active !== undefined ? (changes.active ? 1 : 0) : existing.active,
-    id
-  );
-  recordAudit({ userId: adminUserId, action: "STAFF_UPDATED", entityType: "staff", entityId: id, oldValue: existing, newValue: changes });
+export async function updateStaff(id: string, changes: Partial<StaffInput> & { active?: boolean }, adminUserId: string): Promise<StaffRow> {
+  const existing = await Staff.findById(id);
+  if (!existing) throw new NotFoundError("Staff member");
+  const existingRow = toRow(existing);
+
+  if (changes.fullName !== undefined) existing.fullName = changes.fullName;
+  if (changes.roleTitle !== undefined) existing.roleTitle = changes.roleTitle;
+  if (changes.salaryPaise !== undefined) existing.salaryPaise = changes.salaryPaise;
+  if (changes.salaryMethod !== undefined) existing.salaryMethod = changes.salaryMethod;
+  if (changes.customDays !== undefined) existing.customDays = changes.customDays;
+  if (changes.phone !== undefined) existing.phone = changes.phone;
+  if (changes.active !== undefined) existing.active = changes.active;
+  await existing.save();
+
+  await recordAudit({ userId: adminUserId, action: "STAFF_UPDATED", entityType: "staff", entityId: id, oldValue: existingRow, newValue: changes });
   return getStaffOrThrow(id);
 }
 
@@ -100,6 +110,7 @@ export function dailySalaryRate(staff: StaffRow, year: number, month: number): n
   }
 }
 
-export function monthlySalaryTotal(): number {
-  return listStaff(true).reduce((sum, s) => sum + s.salary_paise, 0);
+export async function monthlySalaryTotal(): Promise<number> {
+  const active = await listStaff(true);
+  return active.reduce((sum, s) => sum + s.salary_paise, 0);
 }

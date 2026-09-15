@@ -1,4 +1,4 @@
-import { db } from "../../db/connection";
+import { Expense, Order, PaymentMethod } from "../../db/models";
 
 export interface SalesSummary {
   orderCount: number;
@@ -17,61 +17,63 @@ export interface SalesSummary {
  * cogs_paise recorded on each order line at consumption time, so it always
  * reflects the recipe/cost that was actually in effect for that sale.
  */
-export function getSalesSummary(fromDate: string, toDate: string): SalesSummary {
-  const orderRow = db
-    .prepare(
-      `SELECT COUNT(*) as cnt, COALESCE(SUM(subtotal_paise),0) as gross,
-              COALESCE(SUM(discount_paise + item_discount_total_paise),0) as disc, COALESCE(SUM(net_total_paise),0) as net
-       FROM sales_orders WHERE business_date BETWEEN ? AND ? AND status = 'COMPLETED'`
-    )
-    .get(fromDate, toDate) as { cnt: number; gross: number; disc: number; net: number };
+export async function getSalesSummary(fromDate: string, toDate: string): Promise<SalesSummary> {
+  const match = { businessDate: { $gte: fromDate, $lte: toDate }, status: "COMPLETED" as const };
 
-  const cogsRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(soi.cogs_paise),0) as cogs
-       FROM sales_order_items soi
-       JOIN sales_orders so ON so.id = soi.sales_order_id
-       WHERE so.business_date BETWEEN ? AND ? AND so.status = 'COMPLETED'`
-    )
-    .get(fromDate, toDate) as { cogs: number };
+  const [orderAgg] = await Order.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        cnt: { $sum: 1 },
+        gross: { $sum: "$subtotalPaise" },
+        disc: { $sum: { $add: ["$discountPaise", "$itemDiscountTotalPaise"] } },
+        net: { $sum: "$netTotalPaise" },
+      },
+    },
+  ]);
 
-  const paymentRows = db
-    .prepare(
-      `SELECT pm.id as paymentMethodId, pm.name as paymentMethodName, pm.type as type,
-              COALESCE(SUM(p.amount_paise),0) as amountPaise
-       FROM payments p
-       JOIN payment_methods pm ON pm.id = p.payment_method_id
-       JOIN sales_orders so ON so.id = p.sales_order_id
-       WHERE so.business_date BETWEEN ? AND ? AND so.status = 'COMPLETED' AND p.status = 'ACTIVE'
-       GROUP BY pm.id`
-    )
-    .all(fromDate, toDate) as { paymentMethodId: string; paymentMethodName: string; type: string; amountPaise: number }[];
+  const [cogsAgg] = await Order.aggregate([
+    { $match: match },
+    { $unwind: "$items" },
+    { $group: { _id: null, cogs: { $sum: { $ifNull: ["$items.cogsPaise", 0] } } } },
+  ]);
 
-  const cashPaise = paymentRows.filter((p) => p.type === "CASH").reduce((s, p) => s + p.amountPaise, 0);
-  const onlinePaise = paymentRows.filter((p) => p.type === "ONLINE").reduce((s, p) => s + p.amountPaise, 0);
+  const paymentAgg: { _id: string; amountPaise: number }[] = await Order.aggregate([
+    { $match: match },
+    { $unwind: "$payments" },
+    { $match: { "payments.status": "ACTIVE" } },
+    { $group: { _id: "$payments.paymentMethodId", amountPaise: { $sum: "$payments.amountPaise" } } },
+  ]);
+
+  const methods = await PaymentMethod.find({ _id: { $in: paymentAgg.map((p) => p._id) } });
+  const methodById = new Map(methods.map((m) => [m._id, m]));
+
+  const paymentBreakdown = paymentAgg.map((p) => ({
+    paymentMethodId: p._id,
+    paymentMethodName: methodById.get(p._id)?.name ?? "",
+    amountPaise: p.amountPaise,
+  }));
+
+  const cashPaise = paymentAgg.filter((p) => methodById.get(p._id)?.type === "CASH").reduce((s, p) => s + p.amountPaise, 0);
+  const onlinePaise = paymentAgg.filter((p) => methodById.get(p._id)?.type === "ONLINE").reduce((s, p) => s + p.amountPaise, 0);
 
   return {
-    orderCount: orderRow.cnt,
-    grossSalesPaise: orderRow.gross,
-    discountsPaise: orderRow.disc,
-    netSalesPaise: orderRow.net,
-    cogsPaise: cogsRow.cogs,
-    paymentBreakdown: paymentRows.map(({ paymentMethodId, paymentMethodName, amountPaise }) => ({
-      paymentMethodId,
-      paymentMethodName,
-      amountPaise,
-    })),
+    orderCount: orderAgg?.cnt ?? 0,
+    grossSalesPaise: orderAgg?.gross ?? 0,
+    discountsPaise: orderAgg?.disc ?? 0,
+    netSalesPaise: orderAgg?.net ?? 0,
+    cogsPaise: cogsAgg?.cogs ?? 0,
+    paymentBreakdown,
     cashPaise,
     onlinePaise,
   };
 }
 
-export function getExpensesTotal(fromDate: string, toDate: string): number {
-  const row = db
-    .prepare(
-      `SELECT COALESCE(SUM(amount_paise),0) as total FROM expenses
-       WHERE business_date BETWEEN ? AND ? AND status = 'RECORDED'`
-    )
-    .get(fromDate, toDate) as { total: number };
-  return row.total;
+export async function getExpensesTotal(fromDate: string, toDate: string): Promise<number> {
+  const [agg] = await Expense.aggregate([
+    { $match: { businessDate: { $gte: fromDate, $lte: toDate }, status: "RECORDED" } },
+    { $group: { _id: null, total: { $sum: "$amountPaise" } } },
+  ]);
+  return agg?.total ?? 0;
 }

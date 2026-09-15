@@ -17,3 +17,5 @@ export function requireRole(...roles: Role[]) {
 export const isAdmin = requireRole("ADMIN");
 export const isManagerUp = requireRole("ADMIN", "MANAGER");
 export const isAnyRole = requireRole("ADMIN", "MANAGER", "STAFF");
+export const isRider = requireRole("RIDER");
+export const isAnyRoleOrRider = requireRole("ADMIN", "MANAGER", "STAFF", "RIDER");

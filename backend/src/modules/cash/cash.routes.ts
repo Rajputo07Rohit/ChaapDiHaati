@@ -15,7 +15,7 @@ cashRouter.get(
   isManagerUp,
   asyncHandler(async (req, res) => {
     const businessDate = (req.query.businessDate as string) || todayBusinessDate();
-    res.json(cashService.getCashLedgerSummary(businessDate));
+    res.json(await cashService.getCashLedgerSummary(businessDate));
   })
 );
 
@@ -34,8 +34,8 @@ cashRouter.post(
   asyncHandler(async (req, res) => {
     const input = txnSchema.parse(req.body);
     const businessDate = input.businessDate || todayBusinessDate();
-    const id = cashService.recordCashTransaction({ ...input, businessDate, userId: req.user!.id });
-    recordAudit({
+    const id = await cashService.recordCashTransaction({ ...input, businessDate, userId: req.user!.id });
+    await recordAudit({
       userId: req.user!.id,
       action: "CASH_ADJUSTMENT",
       entityType: "cash_transaction",

@@ -1,6 +1,7 @@
-import { db } from "../../db/connection";
+import { DailyClosing, DailyClosingDoc } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { ConflictError, NotFoundError, ValidationError } from "../../utils/errors";
 import { getSalesSummary, getExpensesTotal } from "../reports/salesAggregate.service";
 import { getCashLedgerSummary, recordCashTransaction } from "../cash/cash.service";
@@ -29,10 +30,33 @@ export interface DailyClosingRow {
   closed_at: string | null;
 }
 
-export function getClosing(businessDate: string): DailyClosingRow | undefined {
-  return db.prepare("SELECT * FROM daily_closings WHERE business_date = ?").get(businessDate) as
-    | DailyClosingRow
-    | undefined;
+function toRow(doc: DailyClosingDoc): DailyClosingRow {
+  return {
+    id: doc._id,
+    business_date: doc.businessDate,
+    status: doc.status,
+    opening_cash_paise: doc.openingCashPaise,
+    gross_sales_paise: doc.grossSalesPaise,
+    discounts_paise: doc.discountsPaise,
+    net_sales_paise: doc.netSalesPaise,
+    cogs_paise: doc.cogsPaise,
+    gross_profit_paise: doc.grossProfitPaise,
+    expenses_paise: doc.expensesPaise,
+    net_profit_paise: doc.netProfitPaise,
+    expected_cash_paise: doc.expectedCashPaise,
+    actual_cash_paise: doc.actualCashPaise,
+    cash_difference_paise: doc.cashDifferencePaise,
+    cash_diff_reason: doc.cashDiffReason,
+    bank_balance_paise: doc.bankBalancePaise,
+    stock_value_paise: doc.stockValuePaise,
+    closed_by: doc.closedBy,
+    closed_at: doc.closedAt,
+  };
+}
+
+export async function getClosing(businessDate: string): Promise<DailyClosingRow | undefined> {
+  const doc = await DailyClosing.findOne({ businessDate });
+  return doc ? toRow(doc) : undefined;
 }
 
 /**
@@ -47,44 +71,44 @@ export function getClosing(businessDate: string): DailyClosingRow | undefined {
  * later day with a DIFFERENT figure than the carried-forward total should go
  * through an explicit cash adjustment instead, so it stays auditable.
  */
-export function openBusinessDay(businessDate: string, openingCashPaise: number, userId: string): DailyClosingRow {
-  const existing = getClosing(businessDate);
+export async function openBusinessDay(businessDate: string, openingCashPaise: number, userId: string): Promise<DailyClosingRow> {
+  const existing = await getClosing(businessDate);
   if (existing) return existing;
 
-  const isVeryFirstDay = (db.prepare("SELECT COUNT(*) as c FROM daily_closings").get() as { c: number }).c === 0;
+  const isVeryFirstDay = (await DailyClosing.countDocuments()) === 0;
 
-  const txn = db.transaction(() => {
+  await withTransaction(async (session) => {
     const id = newId("close");
-    db.prepare(
-      `INSERT INTO daily_closings (id, business_date, status, opening_cash_paise, opened_by, created_at, updated_at)
-       VALUES (?, ?, 'OPEN', ?, ?, ?, ?)`
-    ).run(id, businessDate, openingCashPaise, userId, nowIso(), nowIso());
+    const now = nowIso();
+    await DailyClosing.create(
+      [{ _id: id, businessDate, status: "OPEN", openingCashPaise, openedBy: userId, createdAt: now, updatedAt: now }],
+      { session }
+    );
 
     if (isVeryFirstDay && openingCashPaise > 0) {
-      recordCashTransaction({
-        businessDate,
-        txnType: "OPENING",
-        direction: "IN",
-        amountPaise: openingCashPaise,
-        reason: "Starting cash float — system bootstrap",
-        userId,
-      });
+      await recordCashTransaction(
+        { businessDate, txnType: "OPENING", direction: "IN", amountPaise: openingCashPaise, reason: "Starting cash float — system bootstrap", userId },
+        session
+      );
     }
 
-    recordAudit({ userId, action: "DAY_OPENED", entityType: "daily_closing", entityId: id, newValue: { businessDate, openingCashPaise, injectedOpeningTxn: isVeryFirstDay } });
+    await recordAudit(
+      { userId, action: "DAY_OPENED", entityType: "daily_closing", entityId: id, newValue: { businessDate, openingCashPaise, injectedOpeningTxn: isVeryFirstDay } },
+      session
+    );
   });
-  txn();
-  return getClosing(businessDate)!;
+
+  return (await getClosing(businessDate))!;
 }
 
-export function buildClosingSnapshot(businessDate: string) {
-  const sales = getSalesSummary(businessDate, businessDate);
-  const expenses = getExpensesTotal(businessDate, businessDate);
+export async function buildClosingSnapshot(businessDate: string) {
+  const sales = await getSalesSummary(businessDate, businessDate);
+  const expenses = await getExpensesTotal(businessDate, businessDate);
   const grossProfit = sales.netSalesPaise - sales.cogsPaise;
   const netProfit = grossProfit - expenses;
-  const cash = getCashLedgerSummary(businessDate);
-  const bankBalance = getBankBalancePaise(businessDate);
-  const stockValue = getStockValuePaise();
+  const cash = await getCashLedgerSummary(businessDate);
+  const bankBalance = await getBankBalancePaise(businessDate);
+  const stockValue = await getStockValuePaise();
 
   return {
     grossSalesPaise: sales.grossSalesPaise,
@@ -111,82 +135,75 @@ export interface CloseDayInput {
   userId: string;
 }
 
-export function closeDay(input: CloseDayInput): DailyClosingRow {
-  const closing = getClosing(input.businessDate);
+export async function closeDay(input: CloseDayInput): Promise<DailyClosingRow> {
+  const closing = await DailyClosing.findOne({ businessDate: input.businessDate });
   if (!closing) throw new NotFoundError("Business day (open it first)");
   if (closing.status === "CLOSED") throw new ConflictError(`${input.businessDate} is already closed.`);
 
-  const snap = buildClosingSnapshot(input.businessDate);
+  const snap = await buildClosingSnapshot(input.businessDate);
   const diff = input.actualCashPaise - snap.expectedCashPaise;
   if (diff !== 0 && !input.cashDiffReason) {
-    throw new ValidationError(
-      `Cash ${diff > 0 ? "excess" : "shortage"} of ${Math.abs(diff)} paise detected. A reason is required before closing.`
-    );
+    throw new ValidationError(`Cash ${diff > 0 ? "excess" : "shortage"} of ${Math.abs(diff)} paise detected. A reason is required before closing.`);
   }
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      `UPDATE daily_closings SET
-        status = 'CLOSED', gross_sales_paise = ?, discounts_paise = ?, net_sales_paise = ?, cogs_paise = ?,
-        gross_profit_paise = ?, expenses_paise = ?, net_profit_paise = ?, expected_cash_paise = ?,
-        actual_cash_paise = ?, cash_difference_paise = ?, cash_diff_reason = ?, bank_balance_paise = ?,
-        stock_value_paise = ?, closed_by = ?, closed_at = ?, notes = ?, updated_at = ?
-       WHERE business_date = ?`
-    ).run(
-      snap.grossSalesPaise,
-      snap.discountsPaise,
-      snap.netSalesPaise,
-      snap.cogsPaise,
-      snap.grossProfitPaise,
-      snap.expensesPaise,
-      snap.netProfitPaise,
-      snap.expectedCashPaise,
-      input.actualCashPaise,
-      diff,
-      input.cashDiffReason ?? null,
-      snap.bankBalancePaise,
-      snap.stockValuePaise,
-      input.userId,
-      nowIso(),
-      input.notes ?? null,
-      nowIso(),
-      input.businessDate
-    );
+  await withTransaction(async (session) => {
+    const now = nowIso();
+    closing.status = "CLOSED";
+    closing.grossSalesPaise = snap.grossSalesPaise;
+    closing.discountsPaise = snap.discountsPaise;
+    closing.netSalesPaise = snap.netSalesPaise;
+    closing.cogsPaise = snap.cogsPaise;
+    closing.grossProfitPaise = snap.grossProfitPaise;
+    closing.expensesPaise = snap.expensesPaise;
+    closing.netProfitPaise = snap.netProfitPaise;
+    closing.expectedCashPaise = snap.expectedCashPaise;
+    closing.actualCashPaise = input.actualCashPaise;
+    closing.cashDifferencePaise = diff;
+    closing.cashDiffReason = input.cashDiffReason ?? null;
+    closing.bankBalancePaise = snap.bankBalancePaise;
+    closing.stockValuePaise = snap.stockValuePaise;
+    closing.closedBy = input.userId;
+    closing.closedAt = now;
+    closing.notes = input.notes ?? null;
+    closing.updatedAt = now;
+    await closing.save({ session });
 
-    recordAudit({
-      userId: input.userId,
-      action: "DAY_CLOSED",
-      entityType: "daily_closing",
-      entityId: closing.id,
-      newValue: { ...snap, actualCashPaise: input.actualCashPaise, cashDifferencePaise: diff },
-      reason: input.cashDiffReason,
-    });
+    await recordAudit(
+      {
+        userId: input.userId,
+        action: "DAY_CLOSED",
+        entityType: "daily_closing",
+        entityId: closing._id,
+        newValue: { ...snap, actualCashPaise: input.actualCashPaise, cashDifferencePaise: diff },
+        reason: input.cashDiffReason,
+      },
+      session
+    );
   });
-  txn();
-  return getClosing(input.businessDate)!;
+
+  return (await getClosing(input.businessDate))!;
 }
 
-export function reopenDay(businessDate: string, reason: string, userId: string): DailyClosingRow {
-  const closing = getClosing(businessDate);
+export async function reopenDay(businessDate: string, reason: string, userId: string): Promise<DailyClosingRow> {
+  const closing = await DailyClosing.findOne({ businessDate });
   if (!closing) throw new NotFoundError("Business day");
   if (closing.status === "OPEN") throw new ConflictError(`${businessDate} is not closed.`);
   if (!reason) throw new ValidationError("A reason is required to reopen a closed day.");
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      `UPDATE daily_closings SET status = 'OPEN', reopened_by = ?, reopened_at = ?, reopen_reason = ?, updated_at = ? WHERE business_date = ?`
-    ).run(userId, nowIso(), reason, nowIso(), businessDate);
+  await withTransaction(async (session) => {
+    const now = nowIso();
+    closing.status = "OPEN";
+    closing.reopenedBy = userId;
+    closing.reopenedAt = now;
+    closing.reopenReason = reason;
+    closing.updatedAt = now;
+    await closing.save({ session });
 
-    recordAudit({
-      userId,
-      action: "DAY_REOPENED",
-      entityType: "daily_closing",
-      entityId: closing.id,
-      oldValue: { status: "CLOSED" },
-      newValue: { status: "OPEN" },
-      reason,
-    });
+    await recordAudit(
+      { userId, action: "DAY_REOPENED", entityType: "daily_closing", entityId: closing._id, oldValue: { status: "CLOSED" }, newValue: { status: "OPEN" }, reason },
+      session
+    );
   });
-  txn();
-  return getClosing(businessDate)!;
+
+  return (await getClosing(businessDate))!;
 }

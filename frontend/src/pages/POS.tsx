@@ -65,6 +65,7 @@ export function POS() {
   const [discountLineOpen, setDiscountLineOpen] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
   const [completedOrder, setCompletedOrder] = useState<SalesOrder | null>(null);
   const [sharingOrder, setSharingOrder] = useState<SalesOrder | null>(null);
   const [cancelCartOpen, setCancelCartOpen] = useState(false);
@@ -134,6 +135,7 @@ export function POS() {
     setDiscountLineOpen(null);
     setCustomerName("");
     setCustomerPhone("");
+    setDeliveryAddress("");
   }
 
   function buildOrderPayload() {
@@ -141,6 +143,7 @@ export function POS() {
       orderType,
       customerName: customerName || undefined,
       customerPhone: customerPhone || undefined,
+      deliveryAddress: orderType === "DELIVERY" ? deliveryAddress || undefined : undefined,
       items: cart.map((l) => ({
         menuItemId: l.menuItemId,
         priceType: l.priceType,
@@ -168,12 +171,29 @@ export function POS() {
       resetCart();
       setPayOpen(false);
       queryClient.invalidateQueries({ queryKey: ["orders"] });
-      queryClient.invalidateQueries({ queryKey: ["kitchen"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Could not complete order");
+    },
+  });
+
+  // Delivery orders don't get paid at the counter — COD is collected by the
+  // rider on delivery, and any prepayment is recorded afterward from the
+  // Orders page. So checkout for a delivery order just creates it and sends
+  // it to the kitchen; every other order type keeps the existing
+  // create-and-pay-in-one-step flow above.
+  const sendToKitchenMutation = useMutation({
+    mutationFn: () => api.post<{ order: SalesOrder }>("/orders", buildOrderPayload()),
+    onSuccess: (res) => {
+      toast.success(`Order #${res.order.order_number} sent to kitchen`);
+      resetCart();
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : "Could not create order");
     },
   });
 
@@ -485,8 +505,12 @@ export function POS() {
             <span>Total</span>
             <span className="tabular-nums">{formatPaise(netTotal)}</span>
           </div>
-          <Button className="w-full py-2.5" disabled={cart.length === 0} onClick={() => setPayOpen(true)}>
-            Charge & Complete
+          <Button
+            className="w-full py-2.5"
+            disabled={cart.length === 0 || sendToKitchenMutation.isPending}
+            onClick={() => (orderType === "DELIVERY" ? sendToKitchenMutation.mutate() : setPayOpen(true))}
+          >
+            {orderType === "DELIVERY" ? (sendToKitchenMutation.isPending ? "Sending…" : "Send to Kitchen") : "Charge & Complete"}
           </Button>
           {cart.length > 0 && (
             <button onClick={() => setCancelCartOpen(true)} className="w-full text-center text-xs text-rose-500 hover:text-rose-600 pt-1">
@@ -509,6 +533,9 @@ export function POS() {
         setCustomerName={setCustomerName}
         customerPhone={customerPhone}
         setCustomerPhone={setCustomerPhone}
+        orderType={orderType}
+        deliveryAddress={deliveryAddress}
+        setDeliveryAddress={setDeliveryAddress}
       />
       <ShareBillModal order={sharingOrder} onClose={() => setSharingOrder(null)} />
 
@@ -550,6 +577,9 @@ function PaymentModal({
   setCustomerName,
   customerPhone,
   setCustomerPhone,
+  orderType,
+  deliveryAddress,
+  setDeliveryAddress,
 }: {
   open: boolean;
   onClose: () => void;
@@ -561,6 +591,9 @@ function PaymentModal({
   setCustomerName: (v: string) => void;
   customerPhone: string;
   setCustomerPhone: (v: string) => void;
+  orderType: OrderType;
+  deliveryAddress: string;
+  setDeliveryAddress: (v: string) => void;
 }) {
   const [lines, setLines] = useState<{ paymentMethodId: string; amountRupees: string }[]>([]);
 
@@ -595,6 +628,14 @@ function PaymentModal({
               className="flex-1"
             />
           </div>
+          {orderType === "DELIVERY" && (
+            <Input
+              placeholder="Delivery address"
+              value={deliveryAddress}
+              onChange={(e) => setDeliveryAddress(e.target.value)}
+              className="w-full mt-1.5"
+            />
+          )}
         </div>
         {lines.map((line, idx) => (
           <div key={idx} className="flex items-center gap-2">

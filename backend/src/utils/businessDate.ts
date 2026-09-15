@@ -1,4 +1,4 @@
-import { db } from "../db/connection";
+import { DailyClosing } from "../db/models";
 import { todayBusinessDate } from "./ids";
 import { ForbiddenError, ValidationError } from "./errors";
 import { Role } from "../types/express";
@@ -9,10 +9,9 @@ export interface ClosingRow {
   status: "OPEN" | "CLOSED";
 }
 
-export function getClosingByDate(businessDate: string): ClosingRow | undefined {
-  return db.prepare("SELECT * FROM daily_closings WHERE business_date = ?").get(businessDate) as
-    | ClosingRow
-    | undefined;
+export async function getClosingByDate(businessDate: string): Promise<ClosingRow | undefined> {
+  const doc = await DailyClosing.findOne({ businessDate });
+  return doc ? { id: doc._id, business_date: doc.businessDate, status: doc.status } : undefined;
 }
 
 /**
@@ -20,17 +19,15 @@ export function getClosingByDate(businessDate: string): ClosingRow | undefined {
  * write lands on an already-closed day (so the caller can add an explicit
  * audit note) — only ADMIN may write to a closed day at all.
  */
-export function assertBusinessDateWritable(businessDate: string, role: Role): boolean {
+export async function assertBusinessDateWritable(businessDate: string, role: Role): Promise<boolean> {
   const today = todayBusinessDate();
   if (businessDate > today) {
     throw new ValidationError("Cannot record a transaction dated in the future.");
   }
-  const closing = getClosingByDate(businessDate);
+  const closing = await getClosingByDate(businessDate);
   if (closing?.status === "CLOSED") {
     if (role !== "ADMIN") {
-      throw new ForbiddenError(
-        `${businessDate} is already closed. Only an Admin can modify records on a closed day.`
-      );
+      throw new ForbiddenError(`${businessDate} is already closed. Only an Admin can modify records on a closed day.`);
     }
     return true;
   }

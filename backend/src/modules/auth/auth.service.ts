@@ -1,44 +1,56 @@
 import bcrypt from "bcryptjs";
-import { db } from "../../db/connection";
+import { User, UserDoc } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { ConflictError, NotFoundError, UnauthorizedError, ValidationError } from "../../utils/errors";
 import { env } from "../../config/env";
 import { Role } from "../../types/express";
 
+// Row shape mirrors the old SQL column names exactly — the frontend already
+// consumes these field names and needs no changes.
 export interface UserRow {
   id: string;
   username: string;
   password_hash: string;
   full_name: string;
   role: Role;
-  active: number;
+  active: boolean;
   created_at: string;
 }
 
-export function findUserByUsername(username: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE username = ?").get(username) as UserRow | undefined;
+function toRow(doc: UserDoc): UserRow {
+  return {
+    id: doc._id,
+    username: doc.username,
+    password_hash: doc.passwordHash,
+    full_name: doc.fullName,
+    role: doc.role,
+    active: doc.active,
+    created_at: doc.createdAt,
+  };
 }
 
-export function login(username: string, password: string): UserRow {
-  const user = findUserByUsername(username);
+export async function findUserByUsername(username: string): Promise<UserRow | undefined> {
+  const doc = await User.findOne({ username });
+  return doc ? toRow(doc) : undefined;
+}
+
+export async function login(username: string, password: string): Promise<UserRow> {
+  const user = await findUserByUsername(username);
   if (!user || !user.active) throw new UnauthorizedError("Invalid username or password.");
   const ok = bcrypt.compareSync(password, user.password_hash);
   if (!ok) throw new UnauthorizedError("Invalid username or password.");
   return user;
 }
 
-export function listUsers() {
-  return db
-    .prepare("SELECT id, username, full_name, role, active, created_at FROM users ORDER BY created_at ASC")
-    .all();
+export async function listUsers() {
+  const docs = await User.find().sort({ createdAt: 1 });
+  return docs.map((d) => ({ id: d._id, username: d.username, full_name: d.fullName, role: d.role, active: d.active, created_at: d.createdAt }));
 }
 
-export function createUser(
-  input: { username: string; password: string; fullName: string; role: Role },
-  adminUserId: string
-): UserRow {
-  const existing = findUserByUsername(input.username);
+export async function createUser(input: { username: string; password: string; fullName: string; role: Role }, adminUserId: string): Promise<UserRow> {
+  const existing = await findUserByUsername(input.username);
   if (existing) throw new ConflictError("A user with this username already exists.");
   if (input.password.length < 6) throw new ValidationError("Password must be at least 6 characters.");
 
@@ -46,65 +58,76 @@ export function createUser(
   const hash = bcrypt.hashSync(input.password, env.bcryptSaltRounds);
   const now = nowIso();
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      "INSERT INTO users (id, username, password_hash, full_name, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)"
-    ).run(id, input.username, hash, input.fullName, input.role, now, now);
+  await withTransaction(async (session) => {
+    await User.create(
+      [
+        {
+          _id: id,
+          username: input.username,
+          passwordHash: hash,
+          fullName: input.fullName,
+          role: input.role,
+          active: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      { session }
+    );
 
-    recordAudit({
-      userId: adminUserId,
-      action: "USER_CREATED",
-      entityType: "user",
-      entityId: id,
-      newValue: { username: input.username, role: input.role },
-    });
+    await recordAudit(
+      {
+        userId: adminUserId,
+        action: "USER_CREATED",
+        entityType: "user",
+        entityId: id,
+        newValue: { username: input.username, role: input.role },
+      },
+      session
+    );
   });
-  txn();
 
-  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow;
+  const created = await User.findById(id);
+  return toRow(created!);
 }
 
-export function updateUser(
+export async function updateUser(
   userId: string,
   changes: { fullName?: string; role?: Role; active?: boolean; password?: string },
   adminUserId: string
 ) {
-  const existing = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as UserRow | undefined;
+  const existing = await User.findById(userId);
   if (!existing) throw new NotFoundError("User");
+  if (changes.password && changes.password.length < 6) throw new ValidationError("Password must be at least 6 characters.");
 
   const now = nowIso();
-  const txn = db.transaction(() => {
+
+  await withTransaction(async (session) => {
     if (changes.fullName !== undefined) {
-      db.prepare("UPDATE users SET full_name = ?, updated_at = ? WHERE id = ?").run(changes.fullName, now, userId);
+      existing.fullName = changes.fullName;
     }
     if (changes.role !== undefined && changes.role !== existing.role) {
-      db.prepare("UPDATE users SET role = ?, updated_at = ? WHERE id = ?").run(changes.role, now, userId);
-      recordAudit({
-        userId: adminUserId,
-        action: "ROLE_CHANGED",
-        entityType: "user",
-        entityId: userId,
-        oldValue: { role: existing.role },
-        newValue: { role: changes.role },
-      });
+      const oldRole = existing.role;
+      existing.role = changes.role;
+      await recordAudit(
+        { userId: adminUserId, action: "ROLE_CHANGED", entityType: "user", entityId: userId, oldValue: { role: oldRole }, newValue: { role: changes.role } },
+        session
+      );
     }
     if (changes.active !== undefined) {
-      db.prepare("UPDATE users SET active = ?, updated_at = ? WHERE id = ?").run(changes.active ? 1 : 0, now, userId);
-      recordAudit({
-        userId: adminUserId,
-        action: changes.active ? "USER_REACTIVATED" : "USER_DEACTIVATED",
-        entityType: "user",
-        entityId: userId,
-      });
+      existing.active = changes.active;
+      await recordAudit(
+        { userId: adminUserId, action: changes.active ? "USER_REACTIVATED" : "USER_DEACTIVATED", entityType: "user", entityId: userId },
+        session
+      );
     }
     if (changes.password) {
-      if (changes.password.length < 6) throw new ValidationError("Password must be at least 6 characters.");
-      const hash = bcrypt.hashSync(changes.password, env.bcryptSaltRounds);
-      db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(hash, now, userId);
-      recordAudit({ userId: adminUserId, action: "PASSWORD_RESET", entityType: "user", entityId: userId });
+      existing.passwordHash = bcrypt.hashSync(changes.password, env.bcryptSaltRounds);
+      await recordAudit({ userId: adminUserId, action: "PASSWORD_RESET", entityType: "user", entityId: userId }, session);
     }
+    existing.updatedAt = now;
+    await existing.save({ session });
   });
-  txn();
 
-  return db.prepare("SELECT id, username, full_name, role, active FROM users WHERE id = ?").get(userId);
+  return { id: existing._id, username: existing.username, full_name: existing.fullName, role: existing.role, active: existing.active };
 }

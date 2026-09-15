@@ -1,7 +1,9 @@
-import { db } from "../../db/connection";
+import { ClientSession, HydratedDocument } from "mongoose";
+import { MenuCategory, Order, OrderDoc, OrderDiscountSub, OrderItemSub, OrderPaymentSub, PaymentMethod, Refund, User } from "../../db/models";
 import { newId, nowIso, todayBusinessDate } from "../../utils/ids";
 import { nextSequence } from "../../utils/sequence";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../../utils/errors";
 import { assertBusinessDateWritable } from "../../utils/businessDate";
 import { getCurrentPrice, getMenuItemOrThrow } from "../menu/menu.service";
@@ -10,12 +12,20 @@ import { recordMovement } from "../inventory/inventory.service";
 import { recordCashTransaction } from "../cash/cash.service";
 import { recordBankTransaction } from "../bank/bank.service";
 import { getPaymentMethodOrThrow } from "../paymentMethods/paymentMethods.service";
+import { formatPaise } from "../../utils/money";
 import { Role } from "../../types/express";
-import { CompleteOrderInput, CreateOrderInput, DiscountType, OrderItemInput, OrderStatus } from "./orders.types";
+import { CompleteOrderInput, CreateOrderInput, DiscountType, OrderItemInput, OrderStatus, PaymentInput, PaymentStatus } from "./orders.types";
 
 const EDITABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY"];
-const COMPLETABLE_STATUSES: OrderStatus[] = ["CONFIRMED", "PREPARING", "READY"];
-const CANCELLABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY"];
+const COMPLETABLE_STATUSES: OrderStatus[] = ["CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
+const CANCELLABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
+
+/** Single-step forward-only stages a staff member can push an order through by hand. */
+const STATUS_ADVANCE_MAP: Record<string, OrderStatus> = {
+  CONFIRMED: "PREPARING",
+  PREPARING: "READY",
+  READY: "OUT_FOR_DELIVERY",
+};
 
 export interface OrderRow {
   id: string;
@@ -23,9 +33,11 @@ export interface OrderRow {
   business_date: string;
   order_type: string;
   status: OrderStatus;
-  kitchen_status: string;
+  payment_status: PaymentStatus;
   customer_name: string | null;
   customer_phone: string | null;
+  delivery_address: string | null;
+  assigned_rider_id: string | null;
   subtotal_paise: number;
   discount_paise: number;
   discount_type: DiscountType;
@@ -36,57 +48,121 @@ export interface OrderRow {
   cancel_reason: string | null;
   notes: string | null;
   created_by: string | null;
+  confirmed_at: string | null;
+  delivered_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export function getOrderOrThrow(id: string): OrderRow {
-  const row = db.prepare("SELECT * FROM sales_orders WHERE id = ?").get(id) as OrderRow | undefined;
-  if (!row) throw new NotFoundError("Order");
-  return row;
+function toOrderRow(doc: OrderDoc): OrderRow {
+  return {
+    id: doc._id,
+    order_number: doc.orderNumber,
+    business_date: doc.businessDate,
+    order_type: doc.orderType,
+    status: doc.status,
+    payment_status: doc.paymentStatus,
+    customer_name: doc.customerName,
+    customer_phone: doc.customerPhone,
+    delivery_address: doc.deliveryAddress,
+    assigned_rider_id: doc.assignedRiderId,
+    subtotal_paise: doc.subtotalPaise,
+    discount_paise: doc.discountPaise,
+    discount_type: doc.discountType,
+    discount_value: doc.discountValue,
+    item_discount_total_paise: doc.itemDiscountTotalPaise,
+    discount_reason: doc.discountReason,
+    net_total_paise: doc.netTotalPaise,
+    cancel_reason: doc.cancelReason,
+    notes: doc.notes,
+    created_by: doc.createdBy,
+    confirmed_at: doc.confirmedAt,
+    delivered_at: doc.deliveredAt,
+    completed_at: doc.completedAt,
+    cancelled_at: doc.cancelledAt,
+    created_at: doc.createdAt,
+    updated_at: doc.updatedAt,
+  };
 }
 
-export function getOrderItems(orderId: string) {
-  return db.prepare("SELECT * FROM sales_order_items WHERE sales_order_id = ?").all(orderId);
+function toItemRow(item: OrderItemSub) {
+  return {
+    id: item._id,
+    menu_item_id: item.menuItemId,
+    item_name_snapshot: item.itemNameSnapshot,
+    category_name: item.categoryName,
+    price_type: item.priceType,
+    unit_price_paise: item.unitPricePaise,
+    quantity: item.quantity,
+    line_subtotal_paise: item.lineSubtotalPaise,
+    recipe_version_id: item.recipeVersionId,
+    cogs_paise: item.cogsPaise,
+    special_instructions: item.specialInstructions,
+    status: item.status,
+    discount_paise: item.discountPaise,
+    discount_type: item.discountType,
+    discount_value: item.discountValue,
+    line_net_paise: item.lineNetPaise,
+  };
 }
 
-export function getOrderPayments(orderId: string) {
-  return db
-    .prepare(
-      `SELECT p.*, pm.name as payment_method_name, pm.type as payment_method_type
-       FROM payments p JOIN payment_methods pm ON pm.id = p.payment_method_id
-       WHERE p.sales_order_id = ? AND p.status = 'ACTIVE'`
-    )
-    .all(orderId);
+async function toPaymentRows(payments: OrderPaymentSub[]) {
+  const active = payments.filter((p) => p.status === "ACTIVE");
+  const methodIds = [...new Set(active.map((p) => p.paymentMethodId))];
+  const methods = await PaymentMethod.find({ _id: { $in: methodIds } });
+  const byId = new Map(methods.map((m) => [m._id, m]));
+  return active.map((p) => {
+    const method = byId.get(p.paymentMethodId);
+    return {
+      id: p._id,
+      payment_method_id: p.paymentMethodId,
+      payment_method_name: method?.name ?? "",
+      payment_method_type: method?.type ?? "CASH",
+      amount_paise: p.amountPaise,
+    };
+  });
 }
 
-export function getOrderFull(id: string) {
-  const order = getOrderOrThrow(id);
-  return { ...order, items: getOrderItems(id), payments: getOrderPayments(id) };
+export async function getOrderOrThrow(id: string, session?: ClientSession): Promise<OrderRow> {
+  const doc = await Order.findById(id).session(session ?? null);
+  if (!doc) throw new NotFoundError("Order");
+  return toOrderRow(doc);
 }
 
-export function listOrders(filters: { status?: string; businessDate?: string; limit?: number } = {}) {
-  let sql = "SELECT * FROM sales_orders WHERE 1=1";
-  const params: unknown[] = [];
-  if (filters.status) {
-    sql += " AND status = ?";
-    params.push(filters.status);
-  }
-  if (filters.businessDate) {
-    sql += " AND business_date = ?";
-    params.push(filters.businessDate);
-  }
-  sql += " ORDER BY created_at DESC";
-  if (filters.limit) {
-    sql += " LIMIT ?";
-    params.push(filters.limit);
-  }
-  return db.prepare(sql).all(...params) as OrderRow[];
+export async function getOrderItems(orderId: string) {
+  const doc = await Order.findById(orderId);
+  if (!doc) return [];
+  return doc.items.map(toItemRow);
+}
+
+export async function getOrderPayments(orderId: string) {
+  const doc = await Order.findById(orderId);
+  if (!doc) return [];
+  return toPaymentRows(doc.payments);
+}
+
+export async function getOrderFull(id: string) {
+  const doc = await Order.findById(id);
+  if (!doc) throw new NotFoundError("Order");
+  return { ...toOrderRow(doc), items: doc.items.map(toItemRow), payments: await toPaymentRows(doc.payments) };
+}
+
+export async function listOrders(filters: { status?: string; businessDate?: string; limit?: number } = {}): Promise<OrderRow[]> {
+  const query: Record<string, unknown> = {};
+  if (filters.status) query.status = filters.status;
+  if (filters.businessDate) query.businessDate = filters.businessDate;
+  let q = Order.find(query).sort({ createdAt: -1 });
+  if (filters.limit) q = q.limit(filters.limit);
+  const docs = await q;
+  return docs.map(toOrderRow);
 }
 
 interface ResolvedOrderItem {
   menuItemId: string;
   itemName: string;
+  categoryName: string | null;
   priceType: "HALF" | "FULL" | "SINGLE";
   unitPricePaise: number;
   quantity: number;
@@ -114,37 +190,42 @@ function resolveDiscountAmount(basePaise: number, discountType: DiscountType, di
   return amount;
 }
 
-function resolveOrderItems(items: OrderItemInput[]): ResolvedOrderItem[] {
-  return items.map((item) => {
-    const menuItem = getMenuItemOrThrow(item.menuItemId);
-    if (menuItem.status !== "ACTIVE") {
-      throw new ValidationError(`${menuItem.name} is not currently available.`);
-    }
-    if (item.quantity <= 0) throw new ValidationError("Quantity must be greater than zero.");
-    const price = getCurrentPrice(item.menuItemId, item.priceType);
-    if (price == null) {
-      throw new ValidationError(`${menuItem.name} has no price configured for ${item.priceType}.`);
-    }
+async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
+  return Promise.all(
+    items.map(async (item) => {
+      const menuItem = await getMenuItemOrThrow(item.menuItemId);
+      if (menuItem.status !== "ACTIVE") {
+        throw new ValidationError(`${menuItem.name} is not currently available.`);
+      }
+      if (item.quantity <= 0) throw new ValidationError("Quantity must be greater than zero.");
+      const price = await getCurrentPrice(item.menuItemId, item.priceType);
+      if (price == null) {
+        throw new ValidationError(`${menuItem.name} has no price configured for ${item.priceType}.`);
+      }
 
-    const lineSubtotalPaise = price * item.quantity;
-    const discountType = item.discountType ?? "FLAT";
-    const discountValue = item.discountValue ?? 0;
-    const itemDiscountPaise = discountValue > 0 ? resolveDiscountAmount(lineSubtotalPaise, discountType, discountValue, menuItem.name) : 0;
+      const lineSubtotalPaise = price * item.quantity;
+      const discountType = item.discountType ?? "FLAT";
+      const discountValue = item.discountValue ?? 0;
+      const itemDiscountPaise = discountValue > 0 ? resolveDiscountAmount(lineSubtotalPaise, discountType, discountValue, menuItem.name) : 0;
 
-    return {
-      menuItemId: item.menuItemId,
-      itemName: menuItem.name,
-      priceType: item.priceType,
-      unitPricePaise: price,
-      quantity: item.quantity,
-      specialInstructions: item.specialInstructions ?? null,
-      discountType,
-      discountValue,
-      lineSubtotalPaise,
-      itemDiscountPaise,
-      lineNetPaise: lineSubtotalPaise - itemDiscountPaise,
-    };
-  });
+      const category = await MenuCategory.findById(menuItem.category_id);
+
+      return {
+        menuItemId: item.menuItemId,
+        itemName: menuItem.name,
+        categoryName: category?.name ?? null,
+        priceType: item.priceType,
+        unitPricePaise: price,
+        quantity: item.quantity,
+        specialInstructions: item.specialInstructions ?? null,
+        discountType,
+        discountValue,
+        lineSubtotalPaise,
+        itemDiscountPaise,
+        lineNetPaise: lineSubtotalPaise - itemDiscountPaise,
+      };
+    })
+  );
 }
 
 /**
@@ -162,487 +243,706 @@ function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountTyp
   return { subtotal, itemDiscountTotal, orderDiscountPaise, net };
 }
 
-export function createOrder(input: CreateOrderInput, userId: string, role: Role): OrderRow {
+function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
+  const items: OrderItemSub[] = [];
+  const discounts: OrderDiscountSub[] = [];
+
+  for (const item of resolvedItems) {
+    const itemId = newId("item");
+    items.push({
+      _id: itemId,
+      menuItemId: item.menuItemId,
+      itemNameSnapshot: item.itemName,
+      categoryName: item.categoryName,
+      priceType: item.priceType,
+      unitPricePaise: item.unitPricePaise,
+      quantity: item.quantity,
+      lineSubtotalPaise: item.lineSubtotalPaise,
+      recipeVersionId: null,
+      cogsPaise: null,
+      specialInstructions: item.specialInstructions,
+      status: "ACTIVE",
+      discountPaise: item.itemDiscountPaise,
+      discountType: item.discountType,
+      discountValue: item.discountValue,
+      lineNetPaise: item.lineNetPaise,
+      createdAt: now,
+    } as OrderItemSub);
+
+    if (item.itemDiscountPaise > 0) {
+      discounts.push({
+        _id: newId("disc"),
+        salesOrderItemId: itemId,
+        amountPaise: item.itemDiscountPaise,
+        discountType: item.discountType,
+        discountValue: item.discountValue,
+        reason: discountReason ?? null,
+        createdBy: null,
+        createdAt: now,
+      } as OrderDiscountSub);
+    }
+  }
+
+  return { items, discounts };
+}
+
+export async function createOrder(input: CreateOrderInput, userId: string, role: Role): Promise<OrderRow> {
   if (!input.items || input.items.length === 0) {
     throw new ValidationError("An order must have at least one item.");
   }
   const businessDate = input.businessDate || todayBusinessDate();
-  assertBusinessDateWritable(businessDate, role);
+  await assertBusinessDateWritable(businessDate, role);
 
-  const resolvedItems = resolveOrderItems(input.items);
+  const resolvedItems = await resolveOrderItems(input.items);
 
   const orderDiscountType: DiscountType = input.discountType ?? "FLAT";
   const orderDiscountValue = input.discountValue ?? 0;
-  const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(
-    resolvedItems,
-    orderDiscountType,
-    orderDiscountValue
-  );
+  const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(resolvedItems, orderDiscountType, orderDiscountValue);
 
-  const orderId = newId("order");
-  const orderNumber = nextSequence("order_number");
   const now = nowIso();
   const status: OrderStatus = input.asDraft ? "DRAFT" : "CONFIRMED";
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO sales_orders
-        (id, order_number, business_date, order_type, status, kitchen_status, customer_name, customer_phone,
-         subtotal_paise, discount_paise, discount_type, discount_value, item_discount_total_paise, discount_reason,
-         net_total_paise, notes, created_by, confirmed_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 'NOT_SENT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      orderId,
-      orderNumber,
-      businessDate,
-      input.orderType,
-      status,
-      input.customerName ?? null,
-      input.customerPhone ?? null,
-      subtotal,
-      orderDiscountPaise,
-      orderDiscountType,
-      orderDiscountValue,
-      itemDiscountTotal,
-      input.discountReason ?? null,
-      net,
-      input.notes ?? null,
-      userId,
-      status === "CONFIRMED" ? now : null,
-      now,
-      now
-    );
-
-    for (const item of resolvedItems) {
-      const itemId = newId("item");
-      db.prepare(
-        `INSERT INTO sales_order_items
-          (id, sales_order_id, menu_item_id, item_name_snapshot, price_type, unit_price_paise, quantity,
-           line_subtotal_paise, discount_paise, discount_type, discount_value, line_net_paise, special_instructions, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        itemId,
-        orderId,
-        item.menuItemId,
-        item.itemName,
-        item.priceType,
-        item.unitPricePaise,
-        item.quantity,
-        item.lineSubtotalPaise,
-        item.itemDiscountPaise,
-        item.discountType,
-        item.discountValue,
-        item.lineNetPaise,
-        item.specialInstructions,
-        now
-      );
-
-      if (item.itemDiscountPaise > 0) {
-        db.prepare(
-          `INSERT INTO discounts (id, sales_order_id, sales_order_item_id, amount_paise, discount_type, discount_value, reason, created_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(newId("disc"), orderId, itemId, item.itemDiscountPaise, item.discountType, item.discountValue, input.discountReason ?? null, userId, now);
-      }
-    }
+  const orderId = await withTransaction(async (session) => {
+    const orderNumber = await nextSequence("order_number", session);
+    const newOrderId = newId("order");
+    const { items, discounts } = buildItemSubs(resolvedItems, now, input.discountReason);
+    for (const d of discounts) d.createdBy = userId;
 
     if (orderDiscountPaise > 0) {
-      db.prepare(
-        `INSERT INTO discounts (id, sales_order_id, amount_paise, discount_type, discount_value, reason, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(newId("disc"), orderId, orderDiscountPaise, orderDiscountType, orderDiscountValue, input.discountReason ?? null, userId, now);
+      discounts.push({
+        _id: newId("disc"),
+        salesOrderItemId: null,
+        amountPaise: orderDiscountPaise,
+        discountType: orderDiscountType,
+        discountValue: orderDiscountValue,
+        reason: input.discountReason ?? null,
+        createdBy: userId,
+        createdAt: now,
+      } as OrderDiscountSub);
     }
 
-    recordAudit({
-      userId,
-      action: "ORDER_CREATED",
-      entityType: "sales_order",
-      entityId: orderId,
-      newValue: { orderNumber, subtotal, itemDiscountTotal, orderDiscountPaise, net, itemCount: resolvedItems.length },
-    });
+    await Order.create(
+      [
+        {
+          _id: newOrderId,
+          orderNumber,
+          businessDate,
+          orderType: input.orderType,
+          status,
+          paymentStatus: "UNPAID",
+          customerName: input.customerName ?? null,
+          customerPhone: input.customerPhone ?? null,
+          deliveryAddress: input.deliveryAddress ?? null,
+          assignedRiderId: null,
+          subtotalPaise: subtotal,
+          discountPaise: orderDiscountPaise,
+          discountType: orderDiscountType,
+          discountValue: orderDiscountValue,
+          itemDiscountTotalPaise: itemDiscountTotal,
+          discountReason: input.discountReason ?? null,
+          netTotalPaise: net,
+          notes: input.notes ?? null,
+          createdBy: userId,
+          confirmedAt: status === "CONFIRMED" ? now : null,
+          createdAt: now,
+          updatedAt: now,
+          items,
+          payments: [],
+          discounts,
+        },
+      ],
+      { session }
+    );
+
+    await recordAudit(
+      {
+        userId,
+        action: "ORDER_CREATED",
+        entityType: "sales_order",
+        entityId: newOrderId,
+        newValue: { orderNumber, subtotal, itemDiscountTotal, orderDiscountPaise, net, itemCount: resolvedItems.length },
+      },
+      session
+    );
+
+    return newOrderId;
   });
-  txn();
 
   return getOrderOrThrow(orderId);
 }
 
-export function updateOrderItems(orderId: string, input: CreateOrderInput, userId: string, role: Role): OrderRow {
-  const order = getOrderOrThrow(orderId);
+export async function updateOrderItems(orderId: string, input: CreateOrderInput, userId: string, role: Role): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
   if (!EDITABLE_STATUSES.includes(order.status)) {
     throw new ConflictError(`Cannot edit an order that is ${order.status.toLowerCase()}.`);
   }
-  assertBusinessDateWritable(order.business_date, role);
+  await assertBusinessDateWritable(order.businessDate, role);
 
   if (!input.items || input.items.length === 0) throw new ValidationError("An order must have at least one item.");
 
-  const resolvedItems = resolveOrderItems(input.items);
+  const resolvedItems = await resolveOrderItems(input.items);
 
   const orderDiscountType: DiscountType = input.discountType ?? "FLAT";
   const orderDiscountValue = input.discountValue ?? 0;
-  const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(
-    resolvedItems,
-    orderDiscountType,
-    orderDiscountValue
-  );
+  const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(resolvedItems, orderDiscountType, orderDiscountValue);
 
   const editedAfterKitchenStarted = order.status === "PREPARING" || order.status === "READY";
   const now = nowIso();
+  const oldSubtotal = order.subtotalPaise;
+  const oldNet = order.netTotalPaise;
 
-  const txn = db.transaction(() => {
-    db.prepare("DELETE FROM discounts WHERE sales_order_id = ?").run(orderId);
-    db.prepare("DELETE FROM sales_order_items WHERE sales_order_id = ?").run(orderId);
-    for (const item of resolvedItems) {
-      const itemId = newId("item");
-      db.prepare(
-        `INSERT INTO sales_order_items
-          (id, sales_order_id, menu_item_id, item_name_snapshot, price_type, unit_price_paise, quantity,
-           line_subtotal_paise, discount_paise, discount_type, discount_value, line_net_paise, special_instructions, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        itemId,
-        orderId,
-        item.menuItemId,
-        item.itemName,
-        item.priceType,
-        item.unitPricePaise,
-        item.quantity,
-        item.lineSubtotalPaise,
-        item.itemDiscountPaise,
-        item.discountType,
-        item.discountValue,
-        item.lineNetPaise,
-        item.specialInstructions,
-        now
-      );
-
-      if (item.itemDiscountPaise > 0) {
-        db.prepare(
-          `INSERT INTO discounts (id, sales_order_id, sales_order_item_id, amount_paise, discount_type, discount_value, reason, created_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(newId("disc"), orderId, itemId, item.itemDiscountPaise, item.discountType, item.discountValue, input.discountReason ?? null, userId, now);
-      }
-    }
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    const { items, discounts } = buildItemSubs(resolvedItems, now, input.discountReason);
+    for (const d of discounts) d.createdBy = userId;
 
     if (orderDiscountPaise > 0) {
-      db.prepare(
-        `INSERT INTO discounts (id, sales_order_id, amount_paise, discount_type, discount_value, reason, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(newId("disc"), orderId, orderDiscountPaise, orderDiscountType, orderDiscountValue, input.discountReason ?? null, userId, now);
+      discounts.push({
+        _id: newId("disc"),
+        salesOrderItemId: null,
+        amountPaise: orderDiscountPaise,
+        discountType: orderDiscountType,
+        discountValue: orderDiscountValue,
+        reason: input.discountReason ?? null,
+        createdBy: userId,
+        createdAt: now,
+      } as OrderDiscountSub);
     }
 
-    db.prepare(
-      `UPDATE sales_orders SET subtotal_paise = ?, discount_paise = ?, discount_type = ?, discount_value = ?,
-       item_discount_total_paise = ?, discount_reason = ?, net_total_paise = ?, notes = COALESCE(?, notes), updated_at = ?
-       WHERE id = ?`
-    ).run(
-      subtotal,
-      orderDiscountPaise,
-      orderDiscountType,
-      orderDiscountValue,
-      itemDiscountTotal,
-      input.discountReason ?? null,
-      net,
-      input.notes ?? null,
-      now,
-      orderId
-    );
+    doc.items = items as typeof doc.items;
+    doc.discounts = discounts as typeof doc.discounts;
+    doc.subtotalPaise = subtotal;
+    doc.discountPaise = orderDiscountPaise;
+    doc.discountType = orderDiscountType;
+    doc.discountValue = orderDiscountValue;
+    doc.itemDiscountTotalPaise = itemDiscountTotal;
+    doc.discountReason = input.discountReason ?? null;
+    doc.netTotalPaise = net;
+    if (input.notes !== undefined) doc.notes = input.notes;
+    doc.updatedAt = now;
+    await doc.save({ session });
 
-    recordAudit({
-      userId,
-      action: editedAfterKitchenStarted ? "ORDER_EDITED_AFTER_KITCHEN_STARTED" : "ORDER_EDITED",
-      entityType: "sales_order",
-      entityId: orderId,
-      oldValue: { subtotal_paise: order.subtotal_paise, net_total_paise: order.net_total_paise },
-      newValue: { subtotal, net },
-    });
+    await recordAudit(
+      {
+        userId,
+        action: editedAfterKitchenStarted ? "ORDER_EDITED_AFTER_KITCHEN_STARTED" : "ORDER_EDITED",
+        entityType: "sales_order",
+        entityId: orderId,
+        oldValue: { subtotal_paise: oldSubtotal, net_total_paise: oldNet },
+        newValue: { subtotal, net },
+      },
+      session
+    );
   });
-  txn();
 
   return getOrderOrThrow(orderId);
 }
 
-export function cancelOrder(orderId: string, reason: string, userId: string, role: Role): OrderRow {
+export async function cancelOrder(orderId: string, reason: string, userId: string, role: Role): Promise<OrderRow> {
   if (!reason) throw new ValidationError("A reason is required to cancel an order.");
-  const order = getOrderOrThrow(orderId);
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
   if (!CANCELLABLE_STATUSES.includes(order.status)) {
-    throw new ConflictError(
-      `Cannot cancel an order that is ${order.status.toLowerCase()}. Use a refund instead for completed orders.`
-    );
+    throw new ConflictError(`Cannot cancel an order that is ${order.status.toLowerCase()}. Use a refund instead for completed orders.`);
   }
-  assertBusinessDateWritable(order.business_date, role);
+  await assertBusinessDateWritable(order.businessDate, role);
 
-  const activePayments = getOrderPayments(orderId) as { id: string; amount_paise: number; payment_method_id: string; payment_method_type: string }[];
   const now = nowIso();
 
-  const txn = db.transaction(() => {
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    const activePayments = doc.payments.filter((p) => p.status === "ACTIVE");
+    const methodIds = [...new Set(activePayments.map((p) => p.paymentMethodId))];
+    const methods = await PaymentMethod.find({ _id: { $in: methodIds } }).session(session);
+    const methodById = new Map(methods.map((m) => [m._id, m]));
+
     for (const p of activePayments) {
-      db.prepare("UPDATE payments SET status = 'VOIDED' WHERE id = ?").run(p.id);
-      if (p.payment_method_type === "CASH") {
-        recordCashTransaction({
-          businessDate: order.business_date,
-          txnType: "REFUND",
-          direction: "OUT",
-          amountPaise: p.amount_paise,
-          referenceType: "ORDER_CANCELLATION",
-          referenceId: orderId,
-          reason: `Refunding pre-payment for cancelled order #${order.order_number}`,
-          userId,
-        });
+      p.status = "VOIDED";
+      const method = methodById.get(p.paymentMethodId);
+      if (method?.type === "CASH") {
+        await recordCashTransaction(
+          {
+            businessDate: doc.businessDate,
+            txnType: "REFUND",
+            direction: "OUT",
+            amountPaise: p.amountPaise,
+            referenceType: "ORDER_CANCELLATION",
+            referenceId: orderId,
+            reason: `Refunding pre-payment for cancelled order #${doc.orderNumber}`,
+            userId,
+          },
+          session
+        );
       } else {
-        recordBankTransaction({
-          businessDate: order.business_date,
-          txnType: "DEBIT",
-          amountPaise: p.amount_paise,
-          description: `Refund of pre-payment — cancelled order #${order.order_number}`,
-          category: "BUSINESS",
-          paymentMethodId: p.payment_method_id,
-          userId,
-        });
+        await recordBankTransaction(
+          {
+            businessDate: doc.businessDate,
+            txnType: "DEBIT",
+            amountPaise: p.amountPaise,
+            description: `Refund of pre-payment — cancelled order #${doc.orderNumber}`,
+            category: "BUSINESS",
+            paymentMethodId: p.paymentMethodId,
+            userId,
+          },
+          session
+        );
       }
     }
 
-    db.prepare(
-      "UPDATE sales_orders SET status = 'CANCELLED', cancel_reason = ?, cancelled_at = ?, updated_at = ? WHERE id = ?"
-    ).run(reason, now, now, orderId);
+    const oldStatus = doc.status;
+    doc.status = "CANCELLED";
+    doc.cancelReason = reason;
+    doc.cancelledAt = now;
+    doc.updatedAt = now;
+    await doc.save({ session });
 
-    recordAudit({
-      userId,
-      action: "ORDER_CANCELLED",
-      entityType: "sales_order",
-      entityId: orderId,
-      oldValue: { status: order.status },
-      newValue: { status: "CANCELLED" },
-      reason,
-    });
-  });
-  txn();
-
-  return getOrderOrThrow(orderId);
-}
-
-export function updateKitchenStatus(orderId: string, kitchenStatus: string, userId: string): OrderRow {
-  const order = getOrderOrThrow(orderId);
-  if (order.status === "CANCELLED" || order.status === "COMPLETED" || order.status === "REFUNDED") {
-    throw new ConflictError(`Cannot update kitchen status for an order that is ${order.status.toLowerCase()}.`);
-  }
-  const statusMap: Record<string, OrderStatus> = {
-    PREPARING: "PREPARING",
-    READY: "READY",
-  };
-  const now = nowIso();
-  const newOrderStatus = statusMap[kitchenStatus] ?? order.status;
-
-  db.prepare("UPDATE sales_orders SET kitchen_status = ?, status = ?, updated_at = ? WHERE id = ?").run(
-    kitchenStatus,
-    newOrderStatus,
-    now,
-    orderId
-  );
-
-  recordAudit({
-    userId,
-    action: "KITCHEN_STATUS_UPDATED",
-    entityType: "sales_order",
-    entityId: orderId,
-    oldValue: { kitchenStatus: order.kitchen_status },
-    newValue: { kitchenStatus },
-  });
-
-  return getOrderOrThrow(orderId);
-}
-
-export function completeOrder(orderId: string, input: CompleteOrderInput, userId: string, role: Role): OrderRow {
-  const order = getOrderOrThrow(orderId);
-  if (!COMPLETABLE_STATUSES.includes(order.status)) {
-    throw new ConflictError(`Cannot complete an order that is ${order.status.toLowerCase()}.`);
-  }
-  const isClosedDay = assertBusinessDateWritable(order.business_date, role);
-
-  if (input.allowNegativeStock && role !== "ADMIN") {
-    throw new ForbiddenError("Only an Admin can override an insufficient-stock warning.");
-  }
-  if (input.allowNegativeStock && !input.overrideReason) {
-    throw new ValidationError("A reason is required to override insufficient stock.");
-  }
-
-  const items = getOrderItems(orderId) as {
-    id: string;
-    menu_item_id: string;
-    price_type: "HALF" | "FULL" | "SINGLE";
-    quantity: number;
-    status: string;
-  }[];
-
-  const existingPayments = getOrderPayments(orderId) as { amount_paise: number }[];
-  const newPayments = input.payments ?? [];
-  const alreadyPaid = existingPayments.reduce((s, p) => s + p.amount_paise, 0);
-  const incomingPaid = newPayments.reduce((s, p) => s + p.amountPaise, 0);
-  const totalPaid = alreadyPaid + incomingPaid;
-
-  if (totalPaid !== order.net_total_paise) {
-    throw new ValidationError(
-      `Payment total does not match the order total. Order: ${order.net_total_paise} paise, received: ${totalPaid} paise.`
+    await recordAudit(
+      {
+        userId,
+        action: "ORDER_CANCELLED",
+        entityType: "sales_order",
+        entityId: orderId,
+        oldValue: { status: oldStatus },
+        newValue: { status: "CANCELLED" },
+        reason,
+      },
+      session
     );
-  }
+  });
 
+  return getOrderOrThrow(orderId);
+}
+
+/** Posts each payment to the cash or bank ledger and pushes it onto the
+ * order's embedded `payments[]`. Pure side-effecting helper — never touches
+ * order status; callers decide what payment_status/order status should
+ * become. Mutates `doc` in place; caller is responsible for `doc.save()`. */
+async function postPayments(doc: HydratedDocument<OrderDoc>, payments: PaymentInput[], userId: string, session: ClientSession): Promise<void> {
   const now = nowIso();
+  for (const p of payments) {
+    const method = await getPaymentMethodOrThrow(p.paymentMethodId);
+    doc.payments.push({
+      _id: newId("pay"),
+      paymentMethodId: p.paymentMethodId,
+      amountPaise: p.amountPaise,
+      reference: p.reference ?? null,
+      status: "ACTIVE",
+      createdBy: userId,
+      createdAt: now,
+    } as OrderPaymentSub);
 
-  const txn = db.transaction(() => {
-    for (const p of newPayments) {
-      const method = getPaymentMethodOrThrow(p.paymentMethodId);
-      db.prepare(
-        `INSERT INTO payments (id, sales_order_id, payment_method_id, amount_paise, reference, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(newId("pay"), orderId, p.paymentMethodId, p.amountPaise, p.reference ?? null, userId, now);
-
-      if (method.type === "CASH") {
-        recordCashTransaction({
-          businessDate: order.business_date,
+    if (method.type === "CASH") {
+      await recordCashTransaction(
+        {
+          businessDate: doc.businessDate,
           txnType: "SALE",
           direction: "IN",
           amountPaise: p.amountPaise,
           referenceType: "ORDER",
-          referenceId: orderId,
+          referenceId: doc._id,
           userId,
-        });
-      } else {
-        recordBankTransaction({
-          businessDate: order.business_date,
+        },
+        session
+      );
+    } else {
+      await recordBankTransaction(
+        {
+          businessDate: doc.businessDate,
           txnType: "CREDIT",
           amountPaise: p.amountPaise,
-          description: `Sale — order #${order.order_number} (${method.name})`,
+          description: `Sale — order #${doc.orderNumber} (${method.name})`,
           category: "BUSINESS",
           paymentMethodId: p.paymentMethodId,
           userId,
-        });
-      }
+        },
+        session
+      );
     }
+  }
+}
 
-    for (const item of items) {
-      if (item.status !== "ACTIVE") continue;
-      const recipeVersion = getEffectiveRecipeVersion(item.menu_item_id, item.price_type, order.created_at);
-      let cogsTotal = 0;
+function paymentStatusFor(totalPaid: number, netTotalPaise: number): PaymentStatus {
+  if (totalPaid <= 0) return "UNPAID";
+  if (totalPaid >= netTotalPaise) return "PAID";
+  return "PARTIAL";
+}
 
-      if (!recipeVersion) {
-        recordAudit({
+/**
+ * Records payment against an order at any point before it's finished — the
+ * COD/rider-collection step, or a staff member logging a phone payment ahead
+ * of dispatch. Never consumes stock or changes the order's status; only
+ * `payment_status` moves. A rider may only pay down an order assigned to them.
+ */
+export async function recordPayment(orderId: string, payments: PaymentInput[], userId: string, role: Role): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.status === "CANCELLED" || order.status === "COMPLETED" || order.status === "REFUNDED") {
+    throw new ConflictError(`Cannot record a payment against an order that is ${order.status.toLowerCase()}.`);
+  }
+  if (role === "RIDER" && order.assignedRiderId !== userId) {
+    throw new ForbiddenError("This order isn't assigned to you.");
+  }
+  if (!payments || payments.length === 0) {
+    throw new ValidationError("At least one payment is required.");
+  }
+
+  const alreadyPaid = order.payments.filter((p) => p.status === "ACTIVE").reduce((s, p) => s + p.amountPaise, 0);
+  const incoming = payments.reduce((s, p) => s + p.amountPaise, 0);
+  const totalPaid = alreadyPaid + incoming;
+
+  if (totalPaid > order.netTotalPaise) {
+    throw new ValidationError(`Payment exceeds the remaining balance. Remaining: ${formatPaise(order.netTotalPaise - alreadyPaid)}.`);
+  }
+
+  const now = nowIso();
+  const newPaymentStatus = paymentStatusFor(totalPaid, order.netTotalPaise);
+  const oldPaymentStatus = order.paymentStatus;
+
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    await postPayments(doc, payments, userId, session);
+    doc.paymentStatus = newPaymentStatus;
+    doc.updatedAt = now;
+    await doc.save({ session });
+
+    await recordAudit(
+      {
+        userId,
+        action: "PAYMENT_RECORDED",
+        entityType: "sales_order",
+        entityId: orderId,
+        oldValue: { paymentStatus: oldPaymentStatus, totalPaid: alreadyPaid },
+        newValue: { paymentStatus: newPaymentStatus, totalPaid },
+      },
+      session
+    );
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * Consumes stock/COGS for every active line and marks the order COMPLETED.
+ * Shared by the one-step counter-sale flow (`completeOrder`) and the rider's
+ * "mark delivered" step (`markDelivered`) — both call this only once payment
+ * is already settled. Mutates and saves `doc` itself.
+ */
+async function finalizeOrder(
+  doc: HydratedDocument<OrderDoc>,
+  userId: string,
+  role: Role,
+  session: ClientSession,
+  opts: { allowNegativeStock?: boolean; overrideReason?: string } = {}
+): Promise<void> {
+  if (opts.allowNegativeStock && role !== "ADMIN") {
+    throw new ForbiddenError("Only an Admin can override an insufficient-stock warning.");
+  }
+  if (opts.allowNegativeStock && !opts.overrideReason) {
+    throw new ValidationError("A reason is required to override insufficient stock.");
+  }
+
+  const isClosedDay = await assertBusinessDateWritable(doc.businessDate, role);
+  const now = nowIso();
+
+  for (const item of doc.items) {
+    if (item.status !== "ACTIVE") continue;
+    const recipeVersion = await getEffectiveRecipeVersion(item.menuItemId, item.priceType, doc.createdAt);
+    let cogsTotal = 0;
+
+    if (!recipeVersion) {
+      await recordAudit(
+        {
           userId,
           action: "MISSING_RECIPE_AT_SALE",
           entityType: "sales_order_item",
-          entityId: item.id,
+          entityId: item._id,
           reason: "No recipe configured — sale completed with zero COGS for this line.",
-        });
-      } else {
-        const recipeItems = getRecipeItems(recipeVersion.id);
-        for (const ri of recipeItems) {
-          const qtyNeeded = (ri.quantity_base * (1 + ri.wastage_pct / 100) * item.quantity) / (ri.yield_pct / 100);
-          const result = recordMovement({
+        },
+        session
+      );
+    } else {
+      const recipeItems = await getRecipeItems(recipeVersion.id);
+      for (const ri of recipeItems) {
+        const qtyNeeded = (ri.quantity_base * (1 + ri.wastage_pct / 100) * item.quantity) / (ri.yield_pct / 100);
+        const result = await recordMovement(
+          {
             inventoryItemId: ri.inventory_item_id,
             movementType: "SALE_CONSUMPTION",
             direction: "OUT",
             quantityBase: qtyNeeded,
             referenceType: "ORDER",
-            referenceId: orderId,
-            businessDate: order.business_date,
+            referenceId: doc._id,
+            businessDate: doc.businessDate,
             userId,
-            allowNegativeStock: !!input.allowNegativeStock,
-            reason: input.allowNegativeStock ? input.overrideReason : null,
-          });
-          cogsTotal += result.totalCostPaise ?? 0;
-        }
+            allowNegativeStock: !!opts.allowNegativeStock,
+            reason: opts.allowNegativeStock ? opts.overrideReason : null,
+          },
+          session
+        );
+        cogsTotal += result.totalCostPaise ?? 0;
       }
-
-      db.prepare("UPDATE sales_order_items SET cogs_paise = ?, recipe_version_id = ? WHERE id = ?").run(
-        cogsTotal,
-        recipeVersion?.id ?? null,
-        item.id
-      );
     }
 
-    db.prepare(
-      "UPDATE sales_orders SET status = 'COMPLETED', kitchen_status = 'SERVED', completed_at = ?, updated_at = ? WHERE id = ?"
-    ).run(now, now, orderId);
+    item.cogsPaise = cogsTotal;
+    item.recipeVersionId = recipeVersion?.id ?? null;
+  }
 
-    recordAudit({
+  doc.status = "COMPLETED";
+  doc.completedAt = now;
+  doc.updatedAt = now;
+  await doc.save({ session });
+
+  await recordAudit(
+    {
       userId,
       action: "ORDER_COMPLETED",
       entityType: "sales_order",
-      entityId: orderId,
-      newValue: { totalPaid, closedDayOverride: isClosedDay },
+      entityId: doc._id,
+      newValue: { closedDayOverride: isClosedDay },
       reason: isClosedDay ? "Completed on an already-closed business day (Admin override)" : undefined,
-    });
+    },
+    session
+  );
+}
+
+/** Counter-sale path: pay in full and finish in one step (dine-in/takeaway/
+ * online, or a delivery order staff decide to close out directly). */
+export async function completeOrder(orderId: string, input: CompleteOrderInput, userId: string, role: Role): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (!COMPLETABLE_STATUSES.includes(order.status)) {
+    throw new ConflictError(`Cannot complete an order that is ${order.status.toLowerCase()}.`);
+  }
+
+  const newPayments = input.payments ?? [];
+  const alreadyPaid = order.payments.filter((p) => p.status === "ACTIVE").reduce((s, p) => s + p.amountPaise, 0);
+  const incomingPaid = newPayments.reduce((s, p) => s + p.amountPaise, 0);
+  const totalPaid = alreadyPaid + incomingPaid;
+
+  if (totalPaid !== order.netTotalPaise) {
+    throw new ValidationError(`Payment total does not match the order total. Order: ${order.netTotalPaise} paise, received: ${totalPaid} paise.`);
+  }
+
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    if (newPayments.length > 0) {
+      await postPayments(doc, newPayments, userId, session);
+      doc.paymentStatus = "PAID";
+    }
+    await finalizeOrder(doc, userId, role, session, { allowNegativeStock: input.allowNegativeStock, overrideReason: input.overrideReason });
   });
-  txn();
 
   return getOrderOrThrow(orderId);
 }
 
-export function refundOrder(
+/** Single-step forward transitions a staff member drives by hand: kitchen
+ * prep stages, and — for a delivery order with a rider already assigned —
+ * sending it out. Never skips a stage. */
+export async function updateOrderStatus(orderId: string, status: OrderStatus, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  const expectedNext = STATUS_ADVANCE_MAP[order.status];
+  if (!expectedNext || expectedNext !== status) {
+    throw new ConflictError(`Cannot move an order from ${order.status.toLowerCase()} to ${status.toLowerCase()}.`);
+  }
+  if (status === "OUT_FOR_DELIVERY") {
+    if (order.orderType !== "DELIVERY") {
+      throw new ValidationError("Only delivery orders can be sent out for delivery.");
+    }
+    if (!order.assignedRiderId) {
+      throw new ValidationError("Assign a rider before sending this order out for delivery.");
+    }
+  }
+
+  const now = nowIso();
+  const oldStatus = order.status;
+  order.status = status;
+  order.updatedAt = now;
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "ORDER_STATUS_UPDATED",
+    entityType: "sales_order",
+    entityId: orderId,
+    oldValue: { status: oldStatus },
+    newValue: { status },
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * The rider's (or staff's, as a fallback) final action on a delivery: only
+ * allowed once payment is fully settled, so a COD order can never be closed
+ * out with money still outstanding. Consumes stock/COGS and completes the
+ * order in the same step as marking it delivered.
+ */
+export async function markDelivered(orderId: string, userId: string, role: Role): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.status !== "OUT_FOR_DELIVERY") {
+    throw new ConflictError(`Cannot mark delivered an order that is ${order.status.toLowerCase()}.`);
+  }
+  if (role === "RIDER" && order.assignedRiderId !== userId) {
+    throw new ForbiddenError("This order isn't assigned to you.");
+  }
+  if (order.paymentStatus !== "PAID") {
+    const paid = order.payments.filter((p) => p.status === "ACTIVE").reduce((s, p) => s + p.amountPaise, 0);
+    const remaining = order.netTotalPaise - paid;
+    throw new ValidationError(`Collect the remaining ${formatPaise(remaining)} before marking this order delivered.`);
+  }
+
+  const now = nowIso();
+
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    doc.deliveredAt = now;
+    doc.updatedAt = now;
+    await recordAudit({ userId, action: "ORDER_DELIVERED", entityType: "sales_order", entityId: orderId, newValue: { deliveredAt: now } }, session);
+    await finalizeOrder(doc, userId, role, session);
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+export async function refundOrder(
   orderId: string,
   input: { amountPaise: number; reason: string; refundType: "FULL" | "PARTIAL"; paymentMethodId: string },
   userId: string,
   role: Role
-): OrderRow {
-  const order = getOrderOrThrow(orderId);
+): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
   if (order.status !== "COMPLETED" && order.status !== "REFUNDED") {
     throw new ConflictError("Only a completed order can be refunded.");
   }
   if (!input.reason) throw new ValidationError("A reason is required to process a refund.");
   if (input.amountPaise <= 0) throw new ValidationError("Refund amount must be greater than zero.");
-  assertBusinessDateWritable(order.business_date, role);
+  await assertBusinessDateWritable(order.businessDate, role);
 
-  const priorRefunds = db
-    .prepare("SELECT COALESCE(SUM(amount_paise),0) as total FROM refunds WHERE sales_order_id = ?")
-    .get(orderId) as { total: number };
+  const priorRefunds = await Refund.aggregate([{ $match: { salesOrderId: orderId } }, { $group: { _id: null, total: { $sum: "$amountPaise" } } }]);
+  const priorTotal = priorRefunds[0]?.total ?? 0;
 
-  if (priorRefunds.total + input.amountPaise > order.net_total_paise) {
+  if (priorTotal + input.amountPaise > order.netTotalPaise) {
     throw new ValidationError("Refund amount exceeds the amount actually paid for this order.");
   }
 
-  const method = getPaymentMethodOrThrow(input.paymentMethodId);
+  const method = await getPaymentMethodOrThrow(input.paymentMethodId);
   const now = nowIso();
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO refunds (id, sales_order_id, amount_paise, refund_type, reason, payment_method_id, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(newId("refund"), orderId, input.amountPaise, input.refundType, input.reason, input.paymentMethodId, userId, now);
+  await withTransaction(async (session) => {
+    await Refund.create(
+      [
+        {
+          _id: newId("refund"),
+          salesOrderId: orderId,
+          amountPaise: input.amountPaise,
+          refundType: input.refundType,
+          reason: input.reason,
+          paymentMethodId: input.paymentMethodId,
+          createdBy: userId,
+          createdAt: now,
+        },
+      ],
+      { session }
+    );
 
     if (method.type === "CASH") {
-      recordCashTransaction({
-        businessDate: order.business_date,
-        txnType: "REFUND",
-        direction: "OUT",
-        amountPaise: input.amountPaise,
-        referenceType: "REFUND",
-        referenceId: orderId,
-        reason: input.reason,
-        userId,
-      });
+      await recordCashTransaction(
+        {
+          businessDate: order.businessDate,
+          txnType: "REFUND",
+          direction: "OUT",
+          amountPaise: input.amountPaise,
+          referenceType: "REFUND",
+          referenceId: orderId,
+          reason: input.reason,
+          userId,
+        },
+        session
+      );
     } else {
-      recordBankTransaction({
-        businessDate: order.business_date,
-        txnType: "DEBIT",
-        amountPaise: input.amountPaise,
-        description: `Refund — order #${order.order_number}: ${input.reason}`,
-        category: "BUSINESS",
-        paymentMethodId: input.paymentMethodId,
-        userId,
-      });
+      await recordBankTransaction(
+        {
+          businessDate: order.businessDate,
+          txnType: "DEBIT",
+          amountPaise: input.amountPaise,
+          description: `Refund — order #${order.orderNumber}: ${input.reason}`,
+          category: "BUSINESS",
+          paymentMethodId: input.paymentMethodId,
+          userId,
+        },
+        session
+      );
     }
 
     if (input.refundType === "FULL") {
-      db.prepare("UPDATE sales_orders SET status = 'REFUNDED', updated_at = ? WHERE id = ?").run(now, orderId);
+      await Order.updateOne({ _id: orderId }, { status: "REFUNDED", paymentStatus: "REFUNDED", updatedAt: now }, { session });
     }
 
-    recordAudit({
-      userId,
-      action: "ORDER_REFUNDED",
-      entityType: "sales_order",
-      entityId: orderId,
-      newValue: { amountPaise: input.amountPaise, refundType: input.refundType },
-      reason: input.reason,
-    });
+    await recordAudit(
+      {
+        userId,
+        action: "ORDER_REFUNDED",
+        entityType: "sales_order",
+        entityId: orderId,
+        newValue: { amountPaise: input.amountPaise, refundType: input.refundType },
+        reason: input.reason,
+      },
+      session
+    );
   });
-  txn();
+
+  return getOrderOrThrow(orderId);
+}
+
+// ============================================================
+// Rider delivery flow
+// ============================================================
+
+/** A rider's actionable queue by default (assigned, dispatched, not yet
+ * delivered); `includeAll` adds their completed/cancelled history too. */
+export async function listOrdersForRider(riderId: string, includeAll = false) {
+  const query: Record<string, unknown> = { assignedRiderId: riderId };
+  if (!includeAll) query.status = "OUT_FOR_DELIVERY";
+  const docs = await Order.find(query).sort({ createdAt: -1 });
+  return Promise.all(
+    docs.map(async (o) => ({ ...toOrderRow(o), items: o.items.map(toItemRow), payments: await toPaymentRows(o.payments) }))
+  );
+}
+
+export async function listRiders() {
+  const docs = await User.find({ role: "RIDER", active: true }).sort({ fullName: 1 });
+  return docs.map((u) => ({ id: u._id, username: u.username, fullName: u.fullName }));
+}
+
+export async function assignRider(orderId: string, riderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.orderType !== "DELIVERY") {
+    throw new ValidationError("Only delivery orders can have a rider assigned.");
+  }
+  if (order.status === "CANCELLED" || order.status === "REFUNDED" || order.status === "COMPLETED") {
+    throw new ValidationError(`Cannot assign a rider to a ${order.status.toLowerCase()} order.`);
+  }
+  const rider = await User.findOne({ _id: riderId, role: "RIDER", active: true });
+  if (!rider) throw new ValidationError("That user is not an active rider.");
+
+  const oldRiderId = order.assignedRiderId;
+  order.assignedRiderId = riderId;
+  order.updatedAt = nowIso();
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "RIDER_ASSIGNED",
+    entityType: "sales_order",
+    entityId: orderId,
+    oldValue: { assignedRiderId: oldRiderId },
+    newValue: { assignedRiderId: riderId },
+  });
 
   return getOrderOrThrow(orderId);
 }

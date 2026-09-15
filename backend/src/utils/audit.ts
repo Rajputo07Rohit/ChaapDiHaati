@@ -1,5 +1,6 @@
-import { db } from "../db/connection";
-import { newId } from "./ids";
+import { ClientSession } from "mongoose";
+import { AuditLog } from "../db/models";
+import { newId, nowIso } from "./ids";
 
 export interface AuditEntry {
   userId: string | null;
@@ -11,24 +12,27 @@ export interface AuditEntry {
   reason?: string | null;
 }
 
-const insertAudit = db.prepare(`
-  INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, old_value, new_value, reason)
-  VALUES (@id, @userId, @action, @entityType, @entityId, @oldValue, @newValue, @reason)
-`);
-
 /**
- * Writes an immutable audit trail entry. Call this inside the same DB
- * transaction as the mutation it records, so the two are never inconsistent.
+ * Writes an immutable audit trail entry. Pass the same `session` as the
+ * mutation it records (when there is one), so the two commit or roll back
+ * together and are never inconsistent. `oldValue`/`newValue` are stored as
+ * native embedded documents, not JSON strings.
  */
-export function recordAudit(entry: AuditEntry): void {
-  insertAudit.run({
-    id: newId("audit"),
-    userId: entry.userId ?? null,
-    action: entry.action,
-    entityType: entry.entityType,
-    entityId: entry.entityId ?? null,
-    oldValue: entry.oldValue !== undefined ? JSON.stringify(entry.oldValue) : null,
-    newValue: entry.newValue !== undefined ? JSON.stringify(entry.newValue) : null,
-    reason: entry.reason ?? null,
-  });
+export async function recordAudit(entry: AuditEntry, session?: ClientSession): Promise<void> {
+  await AuditLog.create(
+    [
+      {
+        _id: newId("audit"),
+        userId: entry.userId ?? null,
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId ?? null,
+        oldValue: entry.oldValue ?? null,
+        newValue: entry.newValue ?? null,
+        reason: entry.reason ?? null,
+        createdAt: nowIso(),
+      },
+    ],
+    { session }
+  );
 }

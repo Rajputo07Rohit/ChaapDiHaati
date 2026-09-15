@@ -1,27 +1,21 @@
-import { db } from "../../db/connection";
+import { Setting } from "../../db/models";
 import { nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
 
-export function getSetting<T = unknown>(key: string, fallback: T): T {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+export async function getSetting<T = unknown>(key: string, fallback: T): Promise<T> {
+  const row = await Setting.findById(key);
   if (!row) return fallback;
-  try {
-    return JSON.parse(row.value) as T;
-  } catch {
-    return fallback;
-  }
+  return row.value as T;
 }
 
-export function setSetting(key: string, value: unknown, userId: string): void {
-  const existing = getSetting(key, null);
-  db.prepare(
-    `INSERT INTO settings (key, value, updated_by, updated_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`
-  ).run(key, JSON.stringify(value), userId, nowIso());
+export async function setSetting(key: string, value: unknown, userId: string): Promise<void> {
+  const existing = await getSetting(key, null);
+  await Setting.findByIdAndUpdate(key, { value, updatedBy: userId, updatedAt: nowIso() }, { upsert: true });
 
-  recordAudit({ userId, action: "SETTING_CHANGED", entityType: "setting", entityId: key, oldValue: existing, newValue: value });
+  await recordAudit({ userId, action: "SETTING_CHANGED", entityType: "setting", entityId: key, oldValue: existing, newValue: value });
 }
 
-export function listSettings() {
-  return db.prepare("SELECT * FROM settings").all();
+export async function listSettings() {
+  const docs = await Setting.find();
+  return docs.map((d) => ({ key: d._id, value: d.value, updated_by: d.updatedBy, updated_at: d.updatedAt }));
 }

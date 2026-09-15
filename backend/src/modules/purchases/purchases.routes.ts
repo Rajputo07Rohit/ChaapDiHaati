@@ -12,7 +12,7 @@ purchasesRouter.get(
   requireAuth,
   isManagerUp,
   asyncHandler(async (req, res) => {
-    const purchases = purchasesService.listPurchases({
+    const purchases = await purchasesService.listPurchases({
       businessDate: req.query.businessDate as string | undefined,
       supplierId: req.query.supplierId as string | undefined,
     });
@@ -25,8 +25,8 @@ purchasesRouter.get(
   requireAuth,
   isManagerUp,
   asyncHandler(async (req, res) => {
-    const purchase = purchasesService.getPurchaseOrThrow(req.params.id);
-    res.json({ purchase, items: purchasesService.getPurchaseItems(req.params.id) });
+    const purchase = await purchasesService.getPurchaseOrThrow(req.params.id);
+    res.json({ purchase, items: await purchasesService.getPurchaseItems(req.params.id) });
   })
 );
 
@@ -58,8 +58,8 @@ purchasesRouter.post(
   isManagerUp,
   asyncHandler(async (req, res) => {
     const input = createPurchaseSchema.parse(req.body);
-    const purchase = purchasesService.recordPurchase(input, req.user!.id, req.user!.role);
-    res.status(201).json({ purchase, items: purchasesService.getPurchaseItems(purchase.id) });
+    const purchase = await purchasesService.recordPurchase(input, req.user!.id, req.user!.role);
+    res.status(201).json({ purchase, items: await purchasesService.getPurchaseItems(purchase.id) });
   })
 );
 
@@ -71,7 +71,7 @@ purchasesRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = voidSchema.parse(req.body);
-    const purchase = purchasesService.voidPurchase(req.params.id, input.reason, req.user!.id);
+    const purchase = await purchasesService.voidPurchase(req.params.id, input.reason, req.user!.id);
     res.json({ purchase });
   })
 );

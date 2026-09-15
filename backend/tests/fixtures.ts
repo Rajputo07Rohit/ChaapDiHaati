@@ -1,94 +1,108 @@
 import bcrypt from "bcryptjs";
-import { db } from "../src/db/connection";
 import { newId, nowIso } from "../src/utils/ids";
 import { setMenuPrice } from "../src/modules/menu/menu.service";
+import { User, PaymentMethod, MenuCategory, InventoryItem, MenuItem, RecipeVersion } from "../src/db/models";
 
 export function ensureRoles() {
-  for (const [name, description] of [
-    ["ADMIN", "x"],
-    ["MANAGER", "x"],
-    ["STAFF", "x"],
-  ]) {
-    db.prepare("INSERT OR IGNORE INTO roles (name, description) VALUES (?, ?)").run(name, description);
-  }
+  // Roles are a schema enum now, not a lookup table — nothing to seed.
 }
 
-export function makeUser(role: "ADMIN" | "MANAGER" | "STAFF" = "ADMIN"): string {
-  ensureRoles();
+export async function makeUser(role: "ADMIN" | "MANAGER" | "STAFF" | "RIDER" = "ADMIN"): Promise<string> {
   const id = newId("user");
   const now = nowIso();
-  db.prepare(
-    "INSERT INTO users (id, username, password_hash, full_name, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)"
-  ).run(id, `${role.toLowerCase()}_${id.slice(-6)}`, bcrypt.hashSync("x", 4), `${role} Test User`, role, now, now);
+  await User.create({
+    _id: id,
+    username: `${role.toLowerCase()}_${id.slice(-6)}`,
+    passwordHash: bcrypt.hashSync("x", 4),
+    fullName: `${role} Test User`,
+    role,
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  });
   return id;
 }
 
-export function makePaymentMethod(type: "CASH" | "ONLINE" = "CASH"): string {
+export async function makePaymentMethod(type: "CASH" | "ONLINE" = "CASH"): Promise<string> {
   const id = newId("pm");
-  db.prepare("INSERT INTO payment_methods (id, name, type, active, sort_order) VALUES (?, ?, ?, 1, 0)").run(
-    id,
-    `${type}_${id.slice(-6)}`,
-    type
-  );
+  await PaymentMethod.create({ _id: id, name: `${type}_${id.slice(-6)}`, type, active: true, sortOrder: 0 });
   return id;
 }
 
-export function makeCategory(): string {
+export async function makeCategory(): Promise<string> {
   const id = newId("cat");
-  db.prepare("INSERT INTO menu_categories (id, name, sort_order, active) VALUES (?, ?, 0, 1)").run(id, `cat_${id.slice(-6)}`);
+  await MenuCategory.create({ _id: id, name: `cat_${id.slice(-6)}`, sortOrder: 0, active: true });
   return id;
 }
 
-export function makeInventoryItem(opts: { openingQtyBase?: number; costPaisePerBase?: number } = {}): string {
+export async function makeInventoryItem(opts: { openingQtyBase?: number; costPaisePerBase?: number } = {}): Promise<string> {
   const id = newId("inv");
-  db.prepare(
-    `INSERT INTO inventory_items
-      (id, name, category, base_unit, purchase_unit, purchase_to_base_factor, current_qty_base, min_stock_base,
-       reorder_level_base, avg_cost_paise_per_base, price_pending, active, created_at)
-     VALUES (?, ?, 'RAW_MATERIAL', 'g', 'kg', 1000, ?, 0, 0, ?, 0, 1, ?)`
-  ).run(id, `item_${id.slice(-6)}`, opts.openingQtyBase ?? 0, opts.costPaisePerBase ?? 0, nowIso());
+  await InventoryItem.create({
+    _id: id,
+    name: `item_${id.slice(-6)}`,
+    category: "RAW_MATERIAL",
+    baseUnit: "g",
+    purchaseUnit: "kg",
+    purchaseToBaseFactor: 1000,
+    currentQtyBase: opts.openingQtyBase ?? 0,
+    minStockBase: 0,
+    reorderLevelBase: 0,
+    avgCostPaisePerBase: opts.costPaisePerBase ?? 0,
+    pricePending: false,
+    active: true,
+    createdAt: nowIso(),
+  });
   return id;
 }
 
-export function makeMenuItemWithRecipe(opts: {
+export async function makeMenuItemWithRecipe(opts: {
   priceType: "HALF" | "FULL" | "SINGLE";
   pricePaise: number;
   ingredientQtyBase: number;
   ingredientCostPaisePerBase: number;
   userId: string;
-}): { menuItemId: string; inventoryItemId: string } {
-  const categoryId = makeCategory();
+}): Promise<{ menuItemId: string; inventoryItemId: string }> {
+  const categoryId = await makeCategory();
   const menuItemId = newId("menuitem");
-  db.prepare(
-    `INSERT INTO menu_items (id, category_id, name, has_half, has_full, has_single, unit_label, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'plate', 'ACTIVE', ?)`
-  ).run(
-    menuItemId,
+  await MenuItem.create({
+    _id: menuItemId,
     categoryId,
-    `menu_${menuItemId.slice(-6)}`,
-    opts.priceType === "HALF" ? 1 : 0,
-    opts.priceType === "FULL" ? 1 : 0,
-    opts.priceType === "SINGLE" ? 1 : 0,
-    nowIso()
-  );
+    name: `menu_${menuItemId.slice(-6)}`,
+    hasHalf: opts.priceType === "HALF",
+    hasFull: opts.priceType === "FULL",
+    hasSingle: opts.priceType === "SINGLE",
+    unitLabel: "plate",
+    status: "ACTIVE",
+    createdAt: nowIso(),
+  });
 
-  setMenuPrice(menuItemId, opts.priceType, opts.pricePaise, opts.userId);
+  await setMenuPrice(menuItemId, opts.priceType, opts.pricePaise, opts.userId);
 
-  const inventoryItemId = makeInventoryItem({ openingQtyBase: 1_000_000, costPaisePerBase: opts.ingredientCostPaisePerBase });
+  const inventoryItemId = await makeInventoryItem({ openingQtyBase: 1_000_000, costPaisePerBase: opts.ingredientCostPaisePerBase });
 
   const versionId = newId("recipe");
-  db.prepare(
-    `INSERT INTO recipe_versions (id, menu_item_id, price_type, version, effective_from, created_by, created_at)
-     VALUES (?, ?, ?, 1, ?, ?, ?)`
-  ).run(versionId, menuItemId, opts.priceType, nowIso(), opts.userId, nowIso());
-  db.prepare(
-    `INSERT INTO recipe_items (id, recipe_version_id, inventory_item_id, quantity_base, wastage_pct, yield_pct, optional)
-     VALUES (?, ?, ?, ?, 0, 100, 0)`
-  ).run(newId("ritem"), versionId, inventoryItemId, opts.ingredientQtyBase);
+  await RecipeVersion.create({
+    _id: versionId,
+    menuItemId,
+    priceType: opts.priceType,
+    version: 1,
+    effectiveFrom: nowIso(),
+    createdBy: opts.userId,
+    createdAt: nowIso(),
+    recipeItems: [
+      {
+        inventoryItemId,
+        quantityBase: opts.ingredientQtyBase,
+        wastagePct: 0,
+        yieldPct: 100,
+        optional: false,
+      },
+    ],
+  });
 
   return { menuItemId, inventoryItemId };
 }
 
-export function getInventoryItem(id: string) {
-  return db.prepare("SELECT * FROM inventory_items WHERE id = ?").get(id) as any;
+export async function getInventoryItem(id: string) {
+  return InventoryItem.findById(id);
 }

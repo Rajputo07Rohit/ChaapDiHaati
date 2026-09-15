@@ -1,8 +1,17 @@
-import fs from "fs";
-import { env } from "../config/env";
+import mongoose from "mongoose";
+import { connectMongo } from "./mongoose";
 
-for (const suffix of ["", "-wal", "-shm"]) {
-  const p = env.databasePath + suffix;
-  if (fs.existsSync(p)) fs.unlinkSync(p);
+async function main() {
+  await connectMongo();
+  const collections = await mongoose.connection.db!.collections();
+  for (const collection of collections) {
+    await collection.deleteMany({});
+  }
+  console.log(`Dropped all documents from ${collections.length} collection(s). Run \`npm run seed\` to rebuild.`);
+  await mongoose.disconnect();
 }
-console.log("Database file removed. Run `npm run migrate` then `npm run seed` to rebuild.");
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

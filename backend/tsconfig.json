@@ -17,5 +17,6 @@
     "noUnusedParameters": false,
     "noImplicitAny": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/db/imports"]
 }

@@ -9,92 +9,18 @@
  * from the restaurant's actual records, entered through the app (Inventory,
  * Recipes, Purchases, etc.), not invented or hardcoded.
  */
-import { db } from "./connection";
-import { runMigrations } from "./migrate";
-
-// IMPORTANT: migrations must run before ANY other module in this project is
-// loaded, because several service modules call db.prepare(...) at module
-// top-level (for performance). Under tsx/esbuild, `import` statements are
-// hoisted to the top of the file (unlike tsc's commonjs output), so a plain
-// `import` placed after this call would still be loaded first and crash
-// against a schema that doesn't exist yet on a fresh database. Using
-// require() here — a real runtime call, not a hoisted declaration —
-// guarantees migrations really do run first.
-runMigrations();
-
-/* eslint-disable @typescript-eslint/no-var-requires */
-const bcrypt = require("bcryptjs") as typeof import("bcryptjs");
-const { newId, nowIso } = require("../utils/ids") as typeof import("../utils/ids");
-const { env } = require("../config/env") as typeof import("../config/env");
-const { setMenuPrice } = require("../modules/menu/menu.service") as typeof import("../modules/menu/menu.service");
-/* eslint-enable @typescript-eslint/no-var-requires */
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+import { connectMongo } from "./mongoose";
+import { newId, nowIso } from "../utils/ids";
+import { env } from "../config/env";
+import { User, PaymentMethod, MenuCategory, MenuItem, Staff } from "./models";
+import { setMenuPrice } from "../modules/menu/menu.service";
 
 function rupees(r: number): number {
   return Math.round(r * 100);
 }
 
-console.log("Seeding Chaap Di Haati RMS...\n");
-console.log("This seed loads login accounts, payment methods, the menu, and");
-console.log("the staff roster. Inventory, recipes, suppliers, and all");
-console.log("transactional data are intentionally left empty — add real data");
-console.log("through the app.\n");
-
-// ============================================================
-// 1. ROLES + USERS
-// ============================================================
-const txnBootstrap = db.transaction(() => {
-  db.prepare("DELETE FROM roles").run();
-  for (const [name, description] of [
-    ["ADMIN", "Full access — owner/operator"],
-    ["MANAGER", "Day-to-day operations, cannot touch financial history or audit trail"],
-    ["STAFF", "Order-taking and kitchen updates only"],
-  ]) {
-    db.prepare("INSERT INTO roles (name, description) VALUES (?, ?)").run(name, description);
-  }
-
-  const users = [
-    { username: "admin", password: "Admin@123", fullName: "Restaurant Owner", role: "ADMIN" },
-    { username: "manager", password: "Manager@123", fullName: "Shift Manager", role: "MANAGER" },
-    { username: "staff", password: "Staff@123", fullName: "Counter Staff", role: "STAFF" },
-  ];
-  const now = nowIso();
-  for (const u of users) {
-    db.prepare(
-      "INSERT INTO users (id, username, password_hash, full_name, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)"
-    ).run(newId("user"), u.username, bcrypt.hashSync(u.password, env.bcryptSaltRounds), u.fullName, u.role, now, now);
-  }
-});
-txnBootstrap();
-
-const ADMIN = (db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as { id: string }).id;
-console.log("✓ Roles + users (admin/manager/staff)");
-
-// ============================================================
-// 2. PAYMENT METHODS — exactly what's actually accepted at the counter
-// ============================================================
-const pmTxn = db.transaction(() => {
-  const methods: [string, "CASH" | "ONLINE", number][] = [
-    ["Cash", "CASH", 0],
-    ["UPI", "ONLINE", 1],
-    ["Zomato", "ONLINE", 2],
-    ["Swiggy", "ONLINE", 3],
-  ];
-  for (const [name, type, sort] of methods) {
-    db.prepare("INSERT INTO payment_methods (id, name, type, active, sort_order) VALUES (?, ?, ?, 1, ?)").run(
-      newId("pm"),
-      name,
-      type,
-      sort
-    );
-  }
-});
-pmTxn();
-console.log("✓ Payment methods (Cash, UPI, Zomato, Swiggy)");
-
-// ============================================================
-// 3. MENU CATEGORIES + ITEMS + PRICES
-// Source: printed menu card ("Desi Chaap Di Hatti", BIT Mesra franchise outlet).
-// ============================================================
 type ItemDef = {
   name: string;
   half?: number;
@@ -229,44 +155,91 @@ const CATEGORIES: { name: string; items: ItemDef[] }[] = [
   },
 ];
 
-const menuTxn = db.transaction(() => {
+async function main() {
+  await connectMongo();
+
+  console.log("Seeding Chaap Di Haati RMS...\n");
+  console.log("This seed loads login accounts, payment methods, the menu, and");
+  console.log("the staff roster. Inventory, recipes, suppliers, and all");
+  console.log("transactional data are intentionally left empty — add real data");
+  console.log("through the app.\n");
+
+  // ============================================================
+  // 1. USERS
+  // ============================================================
+  const now = nowIso();
+  const users = [
+    { username: "admin", password: "Admin@123", fullName: "Restaurant Owner", role: "ADMIN" as const },
+    { username: "manager", password: "Manager@123", fullName: "Shift Manager", role: "MANAGER" as const },
+    { username: "staff", password: "Staff@123", fullName: "Counter Staff", role: "STAFF" as const },
+  ];
+  let adminId = "";
+  for (const u of users) {
+    const id = newId("user");
+    if (u.role === "ADMIN") adminId = id;
+    await User.create({
+      _id: id,
+      username: u.username,
+      passwordHash: bcrypt.hashSync(u.password, env.bcryptSaltRounds),
+      fullName: u.fullName,
+      role: u.role,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  console.log("✓ Users (admin/manager/staff)");
+
+  // ============================================================
+  // 2. PAYMENT METHODS — exactly what's actually accepted at the counter
+  // ============================================================
+  const methods: [string, "CASH" | "ONLINE", number][] = [
+    ["Cash", "CASH", 0],
+    ["UPI", "ONLINE", 1],
+    ["Zomato", "ONLINE", 2],
+    ["Swiggy", "ONLINE", 3],
+  ];
+  for (const [name, type, sort] of methods) {
+    await PaymentMethod.create({ _id: newId("pm"), name, type, active: true, sortOrder: sort });
+  }
+  console.log("✓ Payment methods (Cash, UPI, Zomato, Swiggy)");
+
+  // ============================================================
+  // 3. MENU CATEGORIES + ITEMS + PRICES
+  // Source: printed menu card ("Desi Chaap Di Hatti", BIT Mesra franchise outlet).
+  // ============================================================
   let catSort = 0;
   for (const cat of CATEGORIES) {
     const catId = newId("cat");
-    db.prepare("INSERT INTO menu_categories (id, name, sort_order, active) VALUES (?, ?, ?, 1)").run(catId, cat.name, catSort++);
+    await MenuCategory.create({ _id: catId, name: cat.name, sortOrder: catSort++, active: true });
 
     let itemSort = 0;
     for (const item of cat.items) {
       const itemId = newId("menuitem");
-      db.prepare(
-        `INSERT INTO menu_items (id, category_id, name, has_half, has_full, has_single, unit_label, half_label, full_label, status, sort_order, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`
-      ).run(
-        itemId,
-        catId,
-        item.name,
-        item.half != null ? 1 : 0,
-        item.full != null ? 1 : 0,
-        item.single != null ? 1 : 0,
-        item.unit ?? "plate",
-        item.halfLabel ?? "Half",
-        item.fullLabel ?? "Full",
-        itemSort++,
-        nowIso()
-      );
-      if (item.half != null) setMenuPrice(itemId, "HALF", rupees(item.half), ADMIN);
-      if (item.full != null) setMenuPrice(itemId, "FULL", rupees(item.full), ADMIN);
-      if (item.single != null) setMenuPrice(itemId, "SINGLE", rupees(item.single), ADMIN);
+      await MenuItem.create({
+        _id: itemId,
+        categoryId: catId,
+        name: item.name,
+        hasHalf: item.half != null,
+        hasFull: item.full != null,
+        hasSingle: item.single != null,
+        unitLabel: item.unit ?? "plate",
+        halfLabel: item.halfLabel ?? "Half",
+        fullLabel: item.fullLabel ?? "Full",
+        status: "ACTIVE",
+        sortOrder: itemSort++,
+        createdAt: now,
+      });
+      if (item.half != null) await setMenuPrice(itemId, "HALF", rupees(item.half), adminId);
+      if (item.full != null) await setMenuPrice(itemId, "FULL", rupees(item.full), adminId);
+      if (item.single != null) await setMenuPrice(itemId, "SINGLE", rupees(item.single), adminId);
     }
   }
-});
-menuTxn();
-console.log("✓ Menu categories, items and prices (from the printed menu card)");
+  console.log("✓ Menu categories, items and prices (from the printed menu card)");
 
-// ============================================================
-// 4. STAFF (payroll roster — separate from login accounts)
-// ============================================================
-const staffTxn = db.transaction(() => {
+  // ============================================================
+  // 4. STAFF (payroll roster — separate from login accounts)
+  // ============================================================
   const roster: { fullName: string; roleTitle: string; salaryRupees: number }[] = [
     { fullName: "Manager", roleTitle: "Manager", salaryRupees: 10000 },
     { fullName: "Staff 1", roleTitle: "Staff", salaryRupees: 25000 },
@@ -274,17 +247,29 @@ const staffTxn = db.transaction(() => {
   ];
   const today = nowIso().slice(0, 10);
   for (const person of roster) {
-    db.prepare(
-      `INSERT INTO staff (id, full_name, role_title, salary_paise, salary_method, joining_date, active, created_at)
-       VALUES (?, ?, ?, ?, 'FIXED_30', ?, 1, ?)`
-    ).run(newId("staff"), person.fullName, person.roleTitle, rupees(person.salaryRupees), today, nowIso());
+    await Staff.create({
+      _id: newId("staff"),
+      fullName: person.fullName,
+      roleTitle: person.roleTitle,
+      salaryPaise: rupees(person.salaryRupees),
+      salaryMethod: "FIXED_30",
+      joiningDate: today,
+      active: true,
+      createdAt: nowIso(),
+    });
   }
-});
-staffTxn();
-console.log("✓ Staff roster (Manager ₹10,000 · Staff ₹25,000 · Staff ₹14,000 per month)");
+  console.log("✓ Staff roster (Manager ₹10,000 · Staff ₹25,000 · Staff ₹14,000 per month)");
 
-console.log("\nSeed complete.\n");
-console.log("Login credentials:");
-console.log("  Admin:   admin / Admin@123");
-console.log("  Manager: manager / Manager@123");
-console.log("  Staff:   staff / Staff@123");
+  console.log("\nSeed complete.\n");
+  console.log("Login credentials:");
+  console.log("  Admin:   admin / Admin@123");
+  console.log("  Manager: manager / Manager@123");
+  console.log("  Staff:   staff / Staff@123");
+
+  await mongoose.disconnect();
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

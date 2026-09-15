@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "MANAGER" | "STAFF";
+export type Role = "ADMIN" | "MANAGER" | "STAFF" | "RIDER";
 
 export interface User {
   id: string;
@@ -56,8 +56,17 @@ export interface InventoryItem {
 }
 
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
-export type OrderStatus = "DRAFT" | "CONFIRMED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED" | "REFUNDED";
-export type KitchenStatus = "NOT_SENT" | "PREPARING" | "READY" | "SERVED";
+export type OrderStatus =
+  | "DRAFT"
+  | "CONFIRMED"
+  | "PREPARING"
+  | "READY"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "REFUNDED";
+export type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "REFUNDED";
 
 export interface SalesOrderItem {
   id: string;
@@ -90,9 +99,12 @@ export interface SalesOrder {
   business_date: string;
   order_type: OrderType;
   status: OrderStatus;
-  kitchen_status: KitchenStatus;
+  payment_status: PaymentStatus;
   customer_name: string | null;
   customer_phone: string | null;
+  delivery_address: string | null;
+  assigned_rider_id: string | null;
+  delivered_at: string | null;
   subtotal_paise: number;
   discount_paise: number;
   discount_type: DiscountType;

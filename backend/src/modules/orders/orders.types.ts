@@ -1,6 +1,15 @@
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
-export type OrderStatus = "DRAFT" | "CONFIRMED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED" | "REFUNDED";
-export type KitchenStatus = "NOT_SENT" | "PREPARING" | "READY" | "SERVED";
+export type OrderStatus =
+  | "DRAFT"
+  | "CONFIRMED"
+  | "PREPARING"
+  | "READY"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "REFUNDED";
+export type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "REFUNDED";
 export type PriceType = "HALF" | "FULL" | "SINGLE";
 export type DiscountType = "FLAT" | "PERCENTAGE";
 
@@ -18,6 +27,7 @@ export interface CreateOrderInput {
   orderType: OrderType;
   customerName?: string;
   customerPhone?: string;
+  deliveryAddress?: string;
   items: OrderItemInput[];
   /** Order-level discount, applied on top of (subtotal - item discounts). FLAT is paise; PERCENTAGE is 0-100. */
   discountType?: DiscountType;

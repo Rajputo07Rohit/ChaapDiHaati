@@ -14,25 +14,25 @@ function monthStart(dateStr: string): string {
   return dateStr.slice(0, 7) + "-01";
 }
 
-export function getDashboard() {
+export async function getDashboard() {
   const today = todayBusinessDate();
 
-  const todaySales = getSalesSummary(today, today);
-  const todayExpenses = getExpensesTotal(today, today);
+  const todaySales = await getSalesSummary(today, today);
+  const todayExpenses = await getExpensesTotal(today, today);
   const todayGrossProfit = todaySales.netSalesPaise - todaySales.cogsPaise;
   const todayNetProfit = todayGrossProfit - todayExpenses;
   const avgOrderValue = todaySales.orderCount > 0 ? Math.round(todaySales.netSalesPaise / todaySales.orderCount) : 0;
 
-  const cash = getCashLedgerSummary(today);
-  const bankBalance = getBankBalancePaise(today);
-  const stockValue = getStockValuePaise();
-  const lowStock = getLowStockItems();
+  const cash = await getCashLedgerSummary(today);
+  const bankBalance = await getBankBalancePaise(today);
+  const stockValue = await getStockValuePaise();
+  const lowStock = await getLowStockItems();
 
   const last7 = [];
   for (let i = 6; i >= 0; i--) {
     const date = addDays(today, -i);
-    const sales = getSalesSummary(date, date);
-    const expenses = getExpensesTotal(date, date);
+    const sales = await getSalesSummary(date, date);
+    const expenses = await getExpensesTotal(date, date);
     const grossProfit = sales.netSalesPaise - sales.cogsPaise;
     last7.push({
       date,
@@ -46,8 +46,8 @@ export function getDashboard() {
   }
 
   const mtdFrom = monthStart(today);
-  const mtdSales = getSalesSummary(mtdFrom, today);
-  const mtdExpenses = getExpensesTotal(mtdFrom, today);
+  const mtdSales = await getSalesSummary(mtdFrom, today);
+  const mtdExpenses = await getExpensesTotal(mtdFrom, today);
   const mtdGrossProfit = mtdSales.netSalesPaise - mtdSales.cogsPaise;
 
   return {
@@ -65,7 +65,7 @@ export function getDashboard() {
       netProfitPaise: todayNetProfit,
       cashAvailablePaise: cash.expectedCashPaise,
       bankLedgerBalancePaise: bankBalance,
-      bankReconciliation: getBankReconciliationStatus(),
+      bankReconciliation: await getBankReconciliationStatus(),
       lowStockCount: lowStock.filter((i) => i.stockStatus === "LOW" || i.stockStatus === "CRITICAL").length,
       outOfStockCount: lowStock.filter((i) => i.stockStatus === "OUT_OF_STOCK").length,
     },

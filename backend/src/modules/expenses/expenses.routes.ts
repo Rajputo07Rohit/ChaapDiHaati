@@ -17,7 +17,7 @@ expensesRouter.get(
   requireAuth,
   isManagerUp,
   asyncHandler(async (req, res) => {
-    const expenses = expensesService.listExpenses({
+    const expenses = await expensesService.listExpenses({
       businessDate: req.query.businessDate as string | undefined,
       from: req.query.from as string | undefined,
       to: req.query.to as string | undefined,
@@ -44,7 +44,7 @@ expensesRouter.post(
   isManagerUp,
   asyncHandler(async (req, res) => {
     const input = createExpenseSchema.parse(req.body);
-    const expense = expensesService.recordExpense(input, req.user!.id, req.user!.role);
+    const expense = await expensesService.recordExpense(input, req.user!.id, req.user!.role);
     res.status(201).json({ expense });
   })
 );
@@ -57,7 +57,7 @@ expensesRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = voidSchema.parse(req.body);
-    const expense = expensesService.voidExpense(req.params.id, input.reason, req.user!.id);
+    const expense = await expensesService.voidExpense(req.params.id, input.reason, req.user!.id);
     res.json({ expense });
   })
 );

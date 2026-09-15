@@ -1,7 +1,5 @@
 import { Router } from "express";
 import { z } from "zod";
-import { db } from "../../db/connection";
-import { newId } from "../../utils/ids";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { isAdmin } from "../../middleware/rbac";
@@ -9,9 +7,13 @@ import * as paymentMethodsService from "./paymentMethods.service";
 
 export const paymentMethodsRouter = Router();
 
-paymentMethodsRouter.get("/", requireAuth, (_req, res) => {
-  res.json({ methods: paymentMethodsService.listPaymentMethods() });
-});
+paymentMethodsRouter.get(
+  "/",
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    res.json({ methods: await paymentMethodsService.listPaymentMethods() });
+  })
+);
 
 const createSchema = z.object({
   name: z.string().min(1),
@@ -25,14 +27,8 @@ paymentMethodsRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = createSchema.parse(req.body);
-    const id = newId("pm");
-    db.prepare("INSERT INTO payment_methods (id, name, type, active, sort_order) VALUES (?, ?, ?, 1, ?)").run(
-      id,
-      input.name,
-      input.type,
-      input.sortOrder
-    );
-    res.status(201).json({ method: db.prepare("SELECT * FROM payment_methods WHERE id = ?").get(id) });
+    const method = await paymentMethodsService.createPaymentMethod(input);
+    res.status(201).json({ method });
   })
 );
 
@@ -44,9 +40,7 @@ paymentMethodsRouter.patch(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = updateSchema.parse(req.body);
-    db.prepare(
-      "UPDATE payment_methods SET active = COALESCE(?, active), name = COALESCE(?, name), sort_order = COALESCE(?, sort_order) WHERE id = ?"
-    ).run(input.active === undefined ? null : input.active ? 1 : 0, input.name ?? null, input.sortOrder ?? null, req.params.id);
-    res.json({ method: db.prepare("SELECT * FROM payment_methods WHERE id = ?").get(req.params.id) });
+    const method = await paymentMethodsService.updatePaymentMethod(req.params.id, input);
+    res.json({ method });
   })
 );

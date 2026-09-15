@@ -1,4 +1,5 @@
-import { db } from "../../db/connection";
+import { ClientSession } from "mongoose";
+import { BankTransaction, Setting } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
 import { NotFoundError, ValidationError } from "../../utils/errors";
@@ -16,50 +17,45 @@ export interface RecordBankTxnInput {
   userId: string | null;
 }
 
-const insertStmt = db.prepare(`
-  INSERT INTO bank_transactions
-    (id, business_date, txn_type, amount_paise, description, reference, category, payment_method_id, reconciled, created_by, created_at)
-  VALUES
-    (@id, @businessDate, @txnType, @amountPaise, @description, @reference, @category, @paymentMethodId, 0, @createdBy, @createdAt)
-`);
-
-export function recordBankTransaction(input: RecordBankTxnInput): string {
+export async function recordBankTransaction(input: RecordBankTxnInput, session?: ClientSession): Promise<string> {
   if (input.amountPaise <= 0) throw new ValidationError("Bank amount must be greater than zero.");
   const id = newId("bank");
-  insertStmt.run({
-    id,
-    businessDate: input.businessDate,
-    txnType: input.txnType,
-    amountPaise: input.amountPaise,
-    description: input.description,
-    reference: input.reference ?? null,
-    category: input.category ?? "UNKNOWN",
-    paymentMethodId: input.paymentMethodId ?? null,
-    createdBy: input.userId,
-    createdAt: nowIso(),
-  });
+  await BankTransaction.create(
+    [
+      {
+        _id: id,
+        businessDate: input.businessDate,
+        txnType: input.txnType,
+        amountPaise: input.amountPaise,
+        description: input.description,
+        reference: input.reference ?? null,
+        category: input.category ?? "UNKNOWN",
+        paymentMethodId: input.paymentMethodId ?? null,
+        reconciled: false,
+        createdBy: input.userId,
+        createdAt: nowIso(),
+      },
+    ],
+    { session }
+  );
   return id;
 }
 
 /** Bank balance = opening + credits - debits. Never derived as sales - purchases. */
-export function getBankBalancePaise(asOfDate?: string): number {
-  const settingRow = db.prepare("SELECT value FROM settings WHERE key = 'bank_opening_balance_paise'").get() as
-    | { value: string }
-    | undefined;
-  const opening = settingRow ? parseInt(JSON.parse(settingRow.value), 10) : 0;
+export async function getBankBalancePaise(asOfDate?: string): Promise<number> {
+  const settingDoc = await Setting.findById("bank_opening_balance_paise");
+  const opening = settingDoc ? parseInt(String(settingDoc.value), 10) : 0;
 
-  let sql = "SELECT txn_type, SUM(amount_paise) as total FROM bank_transactions";
-  const params: unknown[] = [];
-  if (asOfDate) {
-    sql += " WHERE business_date <= ?";
-    params.push(asOfDate);
-  }
-  sql += " GROUP BY txn_type";
-  const rows = db.prepare(sql).all(...params) as { txn_type: "CREDIT" | "DEBIT"; total: number }[];
+  const query: Record<string, unknown> = {};
+  if (asOfDate) query.businessDate = { $lte: asOfDate };
+  const rows = await BankTransaction.aggregate<{ _id: "CREDIT" | "DEBIT"; total: number }>([
+    { $match: query },
+    { $group: { _id: "$txnType", total: { $sum: "$amountPaise" } } },
+  ]);
 
   let balance = opening;
   for (const r of rows) {
-    balance += r.txn_type === "CREDIT" ? r.total : -r.total;
+    balance += r._id === "CREDIT" ? r.total : -r.total;
   }
   return balance;
 }
@@ -71,21 +67,17 @@ export function getBankBalancePaise(asOfDate?: string): number {
  * presenting the ledger sum as a confident "Available" figure when it may
  * be incomplete past the last confirmed date.
  */
-export function getBankReconciliationStatus() {
-  const balanceRow = db.prepare("SELECT value FROM settings WHERE key = 'bank_statement_confirmed_balance_paise'").get() as
-    | { value: string }
-    | undefined;
-  const dateRow = db.prepare("SELECT value FROM settings WHERE key = 'bank_statement_confirmed_date'").get() as
-    | { value: string }
-    | undefined;
+export async function getBankReconciliationStatus() {
+  const balanceDoc = await Setting.findById("bank_statement_confirmed_balance_paise");
+  const dateDoc = await Setting.findById("bank_statement_confirmed_date");
 
-  if (!balanceRow || !dateRow) {
+  if (!balanceDoc || !dateDoc) {
     return { hasStatement: false as const, reconciliationPending: true as const };
   }
 
-  const statementBalancePaise = parseInt(JSON.parse(balanceRow.value), 10);
-  const statementDate = JSON.parse(dateRow.value) as string;
-  const ledgerBalanceAsOfStatement = getBankBalancePaise(statementDate);
+  const statementBalancePaise = parseInt(String(balanceDoc.value), 10);
+  const statementDate = String(dateDoc.value);
+  const ledgerBalanceAsOfStatement = await getBankBalancePaise(statementDate);
   const differencePaise = statementBalancePaise - ledgerBalanceAsOfStatement;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -101,40 +93,59 @@ export function getBankReconciliationStatus() {
   };
 }
 
-export function getUnreconciledTransactions() {
-  return db
-    .prepare("SELECT * FROM bank_transactions WHERE reconciled = 0 ORDER BY business_date DESC")
-    .all();
+export async function getUnreconciledTransactions() {
+  const docs = await BankTransaction.find({ reconciled: false }).sort({ businessDate: -1 });
+  return docs.map(toBankRow);
 }
 
-export function reconcileTransaction(
+function toBankRow(doc: InstanceType<typeof BankTransaction>) {
+  return {
+    id: doc._id,
+    business_date: doc.businessDate,
+    txn_type: doc.txnType,
+    amount_paise: doc.amountPaise,
+    description: doc.description,
+    reference: doc.reference,
+    category: doc.category,
+    payment_method_id: doc.paymentMethodId,
+    linked_reference_type: doc.linkedReferenceType,
+    linked_reference_id: doc.linkedReferenceId,
+    reconciled: doc.reconciled,
+    notes: doc.notes,
+    created_by: doc.createdBy,
+    created_at: doc.createdAt,
+  };
+}
+
+export async function listBankTransactions(asOfDate: string) {
+  const docs = await BankTransaction.find({ businessDate: { $lte: asOfDate } })
+    .sort({ businessDate: -1, createdAt: -1 })
+    .limit(200);
+  return docs.map(toBankRow);
+}
+
+export async function reconcileTransaction(
   bankTxnId: string,
   data: { linkedReferenceType?: string; linkedReferenceId?: string; category?: BankCategory; notes?: string },
   userId: string
 ) {
-  const existing = db.prepare("SELECT * FROM bank_transactions WHERE id = ?").get(bankTxnId) as
-    | Record<string, unknown>
-    | undefined;
+  const existing = await BankTransaction.findById(bankTxnId);
   if (!existing) throw new NotFoundError("Bank transaction");
+  const before = toBankRow(existing);
 
-  db.prepare(
-    `UPDATE bank_transactions
-     SET reconciled = 1, linked_reference_type = ?, linked_reference_id = ?, category = COALESCE(?, category), notes = COALESCE(?, notes)
-     WHERE id = ?`
-  ).run(
-    data.linkedReferenceType ?? null,
-    data.linkedReferenceId ?? null,
-    data.category ?? null,
-    data.notes ?? null,
-    bankTxnId
-  );
+  existing.reconciled = true;
+  existing.linkedReferenceType = data.linkedReferenceType ?? null;
+  existing.linkedReferenceId = data.linkedReferenceId ?? null;
+  if (data.category !== undefined) existing.category = data.category;
+  if (data.notes !== undefined) existing.notes = data.notes;
+  await existing.save();
 
-  recordAudit({
+  await recordAudit({
     userId,
     action: "BANK_RECONCILED",
     entityType: "bank_transaction",
     entityId: bankTxnId,
-    oldValue: existing,
+    oldValue: before,
     newValue: data,
   });
 }

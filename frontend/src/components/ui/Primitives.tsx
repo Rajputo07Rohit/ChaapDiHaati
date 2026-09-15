@@ -150,9 +150,21 @@ export function OrderStatusBadge({ status }: { status: string }) {
     CONFIRMED: "blue",
     PREPARING: "yellow",
     READY: "yellow",
+    OUT_FOR_DELIVERY: "blue",
+    DELIVERED: "green",
     COMPLETED: "green",
     CANCELLED: "red",
     REFUNDED: "red",
+  };
+  return <Badge tone={map[status] ?? "default"}>{status.replace(/_/g, " ")}</Badge>;
+}
+
+export function PaymentStatusBadge({ status }: { status: string }) {
+  const map: Record<string, "default" | "green" | "red" | "yellow" | "blue" | "gray"> = {
+    UNPAID: "red",
+    PARTIAL: "yellow",
+    PAID: "green",
+    REFUNDED: "gray",
   };
   return <Badge tone={map[status] ?? "default"}>{status}</Badge>;
 }

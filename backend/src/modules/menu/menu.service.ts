@@ -1,6 +1,7 @@
-import { db } from "../../db/connection";
+import { MenuCategory, MenuItem, MenuItemDoc, MenuPrice } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { NotFoundError, ValidationError } from "../../utils/errors";
 
 export type PriceType = "HALF" | "FULL" | "SINGLE";
@@ -24,31 +25,40 @@ export interface CurrentPriceRow {
   price_paise: number;
 }
 
-const currentPricesStmt = db.prepare(
-  "SELECT price_type, price_paise FROM menu_prices WHERE menu_item_id = ? AND effective_to IS NULL"
-);
-
-export function getCurrentPrices(menuItemId: string): CurrentPriceRow[] {
-  return currentPricesStmt.all(menuItemId) as CurrentPriceRow[];
+function toItemRow(doc: MenuItemDoc): MenuItemRow {
+  return {
+    id: doc._id,
+    category_id: doc.categoryId,
+    name: doc.name,
+    has_half: doc.hasHalf ? 1 : 0,
+    has_full: doc.hasFull ? 1 : 0,
+    has_single: doc.hasSingle ? 1 : 0,
+    unit_label: doc.unitLabel,
+    half_label: doc.halfLabel,
+    full_label: doc.fullLabel,
+    status: doc.status,
+    sort_order: doc.sortOrder,
+  };
 }
 
-export function getCurrentPrice(menuItemId: string, priceType: PriceType): number | null {
-  const row = db
-    .prepare("SELECT price_paise FROM menu_prices WHERE menu_item_id = ? AND price_type = ? AND effective_to IS NULL")
-    .get(menuItemId, priceType) as { price_paise: number } | undefined;
-  return row?.price_paise ?? null;
+export async function getCurrentPrices(menuItemId: string): Promise<CurrentPriceRow[]> {
+  const docs = await MenuPrice.find({ menuItemId, effectiveTo: null });
+  return docs.map((d) => ({ price_type: d.priceType, price_paise: d.pricePaise }));
 }
 
-export function getPriceAt(menuItemId: string, priceType: PriceType, atIso: string): number | null {
-  const row = db
-    .prepare(
-      `SELECT price_paise FROM menu_prices
-       WHERE menu_item_id = ? AND price_type = ? AND effective_from <= ?
-         AND (effective_to IS NULL OR effective_to > ?)
-       ORDER BY effective_from DESC LIMIT 1`
-    )
-    .get(menuItemId, priceType, atIso, atIso) as { price_paise: number } | undefined;
-  return row?.price_paise ?? null;
+export async function getCurrentPrice(menuItemId: string, priceType: PriceType): Promise<number | null> {
+  const row = await MenuPrice.findOne({ menuItemId, priceType, effectiveTo: null });
+  return row?.pricePaise ?? null;
+}
+
+export async function getPriceAt(menuItemId: string, priceType: PriceType, atIso: string): Promise<number | null> {
+  const row = await MenuPrice.findOne({
+    menuItemId,
+    priceType,
+    effectiveFrom: { $lte: atIso },
+    $or: [{ effectiveTo: null }, { effectiveTo: { $gt: atIso } }],
+  }).sort({ effectiveFrom: -1 });
+  return row?.pricePaise ?? null;
 }
 
 /**
@@ -56,61 +66,108 @@ export function getPriceAt(menuItemId: string, priceType: PriceType, atIso: stri
  * historical orders keep referencing the price that was effective at sale
  * time (RULE 5: historical prices are never rewritten).
  */
-export function setMenuPrice(
-  menuItemId: string,
-  priceType: PriceType,
-  newPricePaise: number,
-  userId: string
-): void {
+export async function setMenuPrice(menuItemId: string, priceType: PriceType, newPricePaise: number, userId: string): Promise<void> {
   if (newPricePaise < 0) throw new ValidationError("Price cannot be negative.");
   const now = nowIso();
 
-  const txn = db.transaction(() => {
-    const previous = db
-      .prepare("SELECT * FROM menu_prices WHERE menu_item_id = ? AND price_type = ? AND effective_to IS NULL")
-      .get(menuItemId, priceType) as { id: string; price_paise: number } | undefined;
+  await withTransaction(async (session) => {
+    const previous = await MenuPrice.findOne({ menuItemId, priceType, effectiveTo: null }).session(session);
 
     if (previous) {
-      db.prepare("UPDATE menu_prices SET effective_to = ? WHERE id = ?").run(now, previous.id);
+      previous.effectiveTo = now;
+      await previous.save({ session });
     }
 
-    db.prepare(
-      `INSERT INTO menu_prices (id, menu_item_id, price_type, price_paise, effective_from, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(newId("price"), menuItemId, priceType, newPricePaise, now, userId, now);
+    await MenuPrice.create(
+      [{ _id: newId("price"), menuItemId, priceType, pricePaise: newPricePaise, effectiveFrom: now, createdBy: userId, createdAt: now }],
+      { session }
+    );
 
-    recordAudit({
-      userId,
-      action: "MENU_PRICE_CHANGED",
-      entityType: "menu_item",
-      entityId: menuItemId,
-      oldValue: previous ? { priceType, pricePaise: previous.price_paise } : null,
-      newValue: { priceType, pricePaise: newPricePaise },
-    });
+    await recordAudit(
+      {
+        userId,
+        action: "MENU_PRICE_CHANGED",
+        entityType: "menu_item",
+        entityId: menuItemId,
+        oldValue: previous ? { priceType, pricePaise: previous.pricePaise } : null,
+        newValue: { priceType, pricePaise: newPricePaise },
+      },
+      session
+    );
   });
-
-  txn();
 }
 
-export function getMenuItemOrThrow(id: string): MenuItemRow {
-  const row = db.prepare("SELECT * FROM menu_items WHERE id = ?").get(id) as MenuItemRow | undefined;
-  if (!row) throw new NotFoundError("Menu item");
-  return row;
+export async function getMenuItemOrThrow(id: string): Promise<MenuItemRow> {
+  const doc = await MenuItem.findById(id);
+  if (!doc) throw new NotFoundError("Menu item");
+  return toItemRow(doc);
 }
 
-export function listMenu() {
-  const categories = db
-    .prepare("SELECT * FROM menu_categories WHERE active = 1 ORDER BY sort_order ASC")
-    .all() as { id: string; name: string; sort_order: number }[];
+export async function listMenu() {
+  const categories = await MenuCategory.find({ active: true }).sort({ sortOrder: 1 });
+  const items = await MenuItem.find({ status: { $ne: "DISCONTINUED" } }).sort({ sortOrder: 1 });
 
-  const items = db
-    .prepare("SELECT * FROM menu_items WHERE status != 'DISCONTINUED' ORDER BY sort_order ASC")
-    .all() as MenuItemRow[];
+  const rows = await Promise.all(
+    items.map(async (i) => ({ ...toItemRow(i), prices: await getCurrentPrices(i._id) }))
+  );
 
   return categories.map((cat) => ({
-    ...cat,
-    items: items
-      .filter((i) => i.category_id === cat.id)
-      .map((i) => ({ ...i, prices: getCurrentPrices(i.id) })),
+    id: cat._id,
+    name: cat.name,
+    sort_order: cat.sortOrder,
+    active: cat.active,
+    items: rows.filter((r) => r.category_id === cat._id),
   }));
+}
+
+export async function listCategories() {
+  const docs = await MenuCategory.find().sort({ sortOrder: 1 });
+  return docs.map((c) => ({ id: c._id, name: c.name, sort_order: c.sortOrder, active: c.active }));
+}
+
+export async function createCategory(input: { name: string; sortOrder: number }) {
+  const id = newId("cat");
+  await MenuCategory.create({ _id: id, name: input.name, sortOrder: input.sortOrder, active: true });
+  const c = (await MenuCategory.findById(id))!;
+  return { id: c._id, name: c.name, sort_order: c.sortOrder, active: c.active };
+}
+
+export async function createMenuItem(input: {
+  categoryId: string;
+  name: string;
+  hasHalf?: boolean;
+  hasFull?: boolean;
+  hasSingle?: boolean;
+  unitLabel?: string;
+  halfLabel?: string;
+  fullLabel?: string;
+}): Promise<string> {
+  const id = newId("menuitem");
+  await MenuItem.create({
+    _id: id,
+    categoryId: input.categoryId,
+    name: input.name,
+    hasHalf: !!input.hasHalf,
+    hasFull: !!input.hasFull,
+    hasSingle: !!input.hasSingle,
+    unitLabel: input.unitLabel ?? "plate",
+    halfLabel: input.halfLabel ?? "Half",
+    fullLabel: input.fullLabel ?? "Full",
+    status: "ACTIVE",
+    createdAt: nowIso(),
+  });
+  return id;
+}
+
+export async function updateMenuItemFields(
+  id: string,
+  changes: { name?: string; status?: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED"; halfLabel?: string; fullLabel?: string }
+): Promise<void> {
+  const doc = await MenuItem.findById(id);
+  if (!doc) throw new NotFoundError("Menu item");
+  if (changes.name !== undefined) doc.name = changes.name;
+  if (changes.status !== undefined) doc.status = changes.status;
+  if (changes.halfLabel !== undefined) doc.halfLabel = changes.halfLabel;
+  if (changes.fullLabel !== undefined) doc.fullLabel = changes.fullLabel;
+  await doc.save();
 }

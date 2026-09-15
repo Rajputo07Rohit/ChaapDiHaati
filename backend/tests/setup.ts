@@ -1,18 +1,21 @@
-import path from "path";
-import fs from "fs";
+import { afterAll, beforeAll } from "vitest";
+import mongoose from "mongoose";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 
-const testDbPath = path.join(__dirname, ".test.db");
-for (const suffix of ["", "-wal", "-shm"]) {
-  const p = testDbPath + suffix;
-  if (fs.existsSync(p)) fs.unlinkSync(p);
-}
-
-process.env.DATABASE_PATH = testDbPath;
 process.env.JWT_SECRET = "test-secret";
 process.env.NODE_ENV = "test";
 
-// Dynamic import (not a static `import`) so process.env is set BEFORE the
-// migration/connection modules — and every service module that does
-// db.prepare(...) at top-level — are ever loaded.
-const { runMigrations } = await import("../src/db/migrate");
-runMigrations();
+let replSet: MongoMemoryReplSet;
+
+beforeAll(async () => {
+  // Transactions require a real replica set — a single-node one is enough
+  // for tests and starts fast.
+  replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  process.env.MONGODB_URI = replSet.getUri("chaapdihaati_test");
+  await mongoose.connect(process.env.MONGODB_URI);
+}, 60_000);
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await replSet.stop();
+});

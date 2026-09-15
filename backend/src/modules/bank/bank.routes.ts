@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { z } from "zod";
-import { db } from "../../db/connection";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { isAdmin } from "../../middleware/rbac";
@@ -15,17 +14,20 @@ bankRouter.get(
   isAdmin,
   asyncHandler(async (req, res) => {
     const asOf = (req.query.asOf as string) || todayBusinessDate();
-    const balance = bankService.getBankBalancePaise(asOf);
-    const transactions = db
-      .prepare("SELECT * FROM bank_transactions WHERE business_date <= ? ORDER BY business_date DESC, created_at DESC LIMIT 200")
-      .all(asOf);
-    res.json({ balancePaise: balance, transactions, reconciliation: bankService.getBankReconciliationStatus() });
+    const balance = await bankService.getBankBalancePaise(asOf);
+    const transactions = await bankService.listBankTransactions(asOf);
+    res.json({ balancePaise: balance, transactions, reconciliation: await bankService.getBankReconciliationStatus() });
   })
 );
 
-bankRouter.get("/unreconciled", requireAuth, isAdmin, (_req, res) => {
-  res.json({ transactions: bankService.getUnreconciledTransactions() });
-});
+bankRouter.get(
+  "/unreconciled",
+  requireAuth,
+  isAdmin,
+  asyncHandler(async (_req, res) => {
+    res.json({ transactions: await bankService.getUnreconciledTransactions() });
+  })
+);
 
 const createTxnSchema = z.object({
   businessDate: z.string(),
@@ -42,7 +44,7 @@ bankRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = createTxnSchema.parse(req.body);
-    const id = bankService.recordBankTransaction({ ...input, userId: req.user!.id });
+    const id = await bankService.recordBankTransaction({ ...input, userId: req.user!.id });
     res.status(201).json({ id });
   })
 );
@@ -60,7 +62,7 @@ bankRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = reconcileSchema.parse(req.body);
-    bankService.reconcileTransaction(req.params.id, input, req.user!.id);
+    await bankService.reconcileTransaction(req.params.id, input, req.user!.id);
     res.json({ ok: true });
   })
 );

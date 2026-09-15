@@ -3,13 +3,13 @@
   command = "npm run build"
   publish = "frontend/dist"
 
-# Proxies API calls through Netlify to the Railway backend so the browser
+# Proxies API calls through Netlify to the Render backend so the browser
 # sees everything as same-origin — no CORS setup needed, and the existing
 # session cookie (SameSite=Lax) keeps working without any backend changes.
-# Replace the target with your real Railway backend URL after first deploy.
+# Replace the target with your real Render backend URL after first deploy.
 [[redirects]]
   from = "/api/*"
-  to = "https://REPLACE-WITH-YOUR-RAILWAY-URL.up.railway.app/api/:splat"
+  to = "https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/api/:splat"
   status = 200
   force = true
 

@@ -1,7 +1,8 @@
-import { db } from "../../db/connection";
+import { InventoryItem, Purchase, PurchaseDoc, PurchaseItemSub } from "../../db/models";
 import { newId, nowIso, todayBusinessDate } from "../../utils/ids";
 import { nextPurchaseNumber } from "../../utils/sequence";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { ConflictError, NotFoundError, ValidationError } from "../../utils/errors";
 import { assertBusinessDateWritable } from "../../utils/businessDate";
 import { convertQuantity } from "../../utils/units";
@@ -26,65 +27,94 @@ export interface PurchaseOrderRow {
   total_paise: number;
   amount_paid_paise: number;
   status: string;
+  void_reason: string | null;
   notes: string | null;
 }
 
-export function getPurchaseOrThrow(id: string): PurchaseOrderRow {
-  const row = db.prepare("SELECT * FROM purchase_orders WHERE id = ?").get(id) as PurchaseOrderRow | undefined;
-  if (!row) throw new NotFoundError("Purchase");
-  return row;
+function toRow(doc: PurchaseDoc): PurchaseOrderRow {
+  return {
+    id: doc._id,
+    purchase_number: doc.purchaseNumber,
+    supplier_id: doc.supplierId,
+    invoice_number: doc.invoiceNumber,
+    business_date: doc.businessDate,
+    payment_method_id: doc.paymentMethodId,
+    payment_status: doc.paymentStatus,
+    subtotal_paise: doc.subtotalPaise,
+    tax_paise: doc.taxPaise,
+    discount_paise: doc.discountPaise,
+    total_paise: doc.totalPaise,
+    amount_paid_paise: doc.amountPaidPaise,
+    status: doc.status,
+    void_reason: doc.voidReason,
+    notes: doc.notes,
+  };
 }
 
-export function getPurchaseItems(purchaseOrderId: string) {
-  return db
-    .prepare(
-      `SELECT pi.*, ii.name as item_name FROM purchase_items pi
-       JOIN inventory_items ii ON ii.id = pi.inventory_item_id
-       WHERE pi.purchase_order_id = ?`
-    )
-    .all(purchaseOrderId);
+function toItemRow(item: PurchaseItemSub, itemName: string) {
+  return {
+    id: item._id,
+    inventory_item_id: item.inventoryItemId,
+    item_name: itemName,
+    quantity: item.quantity,
+    purchase_unit: item.purchaseUnit,
+    quantity_base: item.quantityBase,
+    rate_paise: item.ratePaise,
+    amount_paise: item.amountPaise,
+    price_pending: item.pricePending ? 1 : 0,
+    notes: item.notes,
+  };
 }
 
-export function listPurchases(filters: { businessDate?: string; supplierId?: string } = {}) {
-  let sql = "SELECT * FROM purchase_orders WHERE 1=1";
-  const params: unknown[] = [];
-  if (filters.businessDate) {
-    sql += " AND business_date = ?";
-    params.push(filters.businessDate);
-  }
-  if (filters.supplierId) {
-    sql += " AND supplier_id = ?";
-    params.push(filters.supplierId);
-  }
-  sql += " ORDER BY created_at DESC";
-  return db.prepare(sql).all(...params) as PurchaseOrderRow[];
+export async function getPurchaseOrThrow(id: string): Promise<PurchaseOrderRow> {
+  const doc = await Purchase.findById(id);
+  if (!doc) throw new NotFoundError("Purchase");
+  return toRow(doc);
 }
 
-export function recordPurchase(input: RecordPurchaseInput, userId: string, role: Role): PurchaseOrderRow {
+export async function getPurchaseItems(purchaseOrderId: string) {
+  const doc = await Purchase.findById(purchaseOrderId);
+  if (!doc) return [];
+  const items = await InventoryItem.find({ _id: { $in: doc.purchaseItems.map((i) => i.inventoryItemId) } });
+  const byId = new Map(items.map((i) => [i._id, i.name]));
+  return doc.purchaseItems.map((i) => toItemRow(i, byId.get(i.inventoryItemId) ?? ""));
+}
+
+export async function listPurchases(filters: { businessDate?: string; supplierId?: string } = {}): Promise<PurchaseOrderRow[]> {
+  const query: Record<string, unknown> = {};
+  if (filters.businessDate) query.businessDate = filters.businessDate;
+  if (filters.supplierId) query.supplierId = filters.supplierId;
+  const docs = await Purchase.find(query).sort({ createdAt: -1 });
+  return docs.map(toRow);
+}
+
+export async function recordPurchase(input: RecordPurchaseInput, userId: string, role: Role): Promise<PurchaseOrderRow> {
   if (!input.items || input.items.length === 0) throw new ValidationError("A purchase must have at least one item.");
   const businessDate = input.businessDate || todayBusinessDate();
-  assertBusinessDateWritable(businessDate, role);
+  await assertBusinessDateWritable(businessDate, role);
 
-  const lines = input.items.map((item) => {
-    const invItem = getInventoryItemOrThrow(item.inventoryItemId);
-    if (item.quantity <= 0) throw new ValidationError(`Quantity for ${invItem.name} must be greater than zero.`);
-    const quantityInItemUnit = convertQuantity(item.purchaseUnit, invItem.purchase_unit, item.quantity);
-    const quantityBase = quantityInItemUnit * invItem.purchase_to_base_factor;
-    const pricePending = !!item.pricePending || item.ratePaise == null;
-    const amountPaise = pricePending ? null : Math.round((item.ratePaise as number) * item.quantity);
+  const lines = await Promise.all(
+    input.items.map(async (item) => {
+      const invItem = await getInventoryItemOrThrow(item.inventoryItemId);
+      if (item.quantity <= 0) throw new ValidationError(`Quantity for ${invItem.name} must be greater than zero.`);
+      const quantityInItemUnit = convertQuantity(item.purchaseUnit, invItem.purchase_unit, item.quantity);
+      const quantityBase = quantityInItemUnit * invItem.purchase_to_base_factor;
+      const pricePending = !!item.pricePending || item.ratePaise == null;
+      const amountPaise = pricePending ? null : Math.round((item.ratePaise as number) * item.quantity);
 
-    return {
-      inventoryItemId: item.inventoryItemId,
-      itemName: invItem.name,
-      quantity: item.quantity,
-      purchaseUnit: item.purchaseUnit,
-      quantityBase,
-      ratePaise: pricePending ? null : item.ratePaise ?? null,
-      amountPaise,
-      pricePending,
-      notes: item.notes ?? null,
-    };
-  });
+      return {
+        inventoryItemId: item.inventoryItemId,
+        itemName: invItem.name,
+        quantity: item.quantity,
+        purchaseUnit: item.purchaseUnit,
+        quantityBase,
+        ratePaise: pricePending ? null : item.ratePaise ?? null,
+        amountPaise,
+        pricePending,
+        notes: item.notes ?? null,
+      };
+    })
+  );
 
   const subtotal = lines.reduce((s, l) => s + (l.amountPaise ?? 0), 0);
   const tax = input.taxPaise ?? 0;
@@ -105,168 +135,170 @@ export function recordPurchase(input: RecordPurchaseInput, userId: string, role:
   }
 
   const purchaseId = newId("purchase");
-  const purchaseNumber = nextPurchaseNumber();
   const now = nowIso();
 
-  const txn = db.transaction(() => {
-    db.prepare(
-      `INSERT INTO purchase_orders
-        (id, purchase_number, supplier_id, invoice_number, business_date, payment_method_id, payment_status,
-         subtotal_paise, tax_paise, discount_paise, total_paise, amount_paid_paise, notes, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      purchaseId,
-      purchaseNumber,
-      input.supplierId ?? null,
-      input.invoiceNumber ?? null,
-      businessDate,
-      input.paymentMethodId ?? null,
-      input.paymentStatus,
-      subtotal,
-      tax,
-      discount,
-      total,
-      amountPaid,
-      input.notes ?? null,
-      userId,
-      now,
-      now
+  await withTransaction(async (session) => {
+    const purchaseNumber = await nextPurchaseNumber(session);
+
+    const purchaseItems: PurchaseItemSub[] = lines.map(
+      (l) =>
+        ({
+          _id: newId("pline"),
+          inventoryItemId: l.inventoryItemId,
+          quantity: l.quantity,
+          purchaseUnit: l.purchaseUnit,
+          quantityBase: l.quantityBase,
+          ratePaise: l.ratePaise,
+          amountPaise: l.amountPaise,
+          pricePending: l.pricePending,
+          notes: l.notes,
+        }) as PurchaseItemSub
+    );
+
+    await Purchase.create(
+      [
+        {
+          _id: purchaseId,
+          purchaseNumber,
+          supplierId: input.supplierId ?? null,
+          invoiceNumber: input.invoiceNumber ?? null,
+          businessDate,
+          paymentMethodId: input.paymentMethodId ?? null,
+          paymentStatus: input.paymentStatus,
+          subtotalPaise: subtotal,
+          taxPaise: tax,
+          discountPaise: discount,
+          totalPaise: total,
+          amountPaidPaise: amountPaid,
+          notes: input.notes ?? null,
+          status: "RECORDED",
+          createdBy: userId,
+          createdAt: now,
+          updatedAt: now,
+          purchaseItems,
+        },
+      ],
+      { session }
     );
 
     for (const l of lines) {
-      db.prepare(
-        `INSERT INTO purchase_items
-          (id, purchase_order_id, inventory_item_id, quantity, purchase_unit, quantity_base, rate_paise, amount_paise, price_pending, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        newId("pline"),
-        purchaseId,
-        l.inventoryItemId,
-        l.quantity,
-        l.purchaseUnit,
-        l.quantityBase,
-        l.ratePaise,
-        l.amountPaise,
-        l.pricePending ? 1 : 0,
-        l.notes
+      await recordMovement(
+        {
+          inventoryItemId: l.inventoryItemId,
+          movementType: "PURCHASE",
+          direction: "IN",
+          quantityBase: l.quantityBase,
+          unitCostPaisePerBase: l.amountPaise != null ? l.amountPaise / l.quantityBase : null,
+          referenceType: "PURCHASE",
+          referenceId: purchaseId,
+          businessDate,
+          userId,
+        },
+        session
       );
-
-      recordMovement({
-        inventoryItemId: l.inventoryItemId,
-        movementType: "PURCHASE",
-        direction: "IN",
-        quantityBase: l.quantityBase,
-        unitCostPaisePerBase: l.amountPaise != null ? l.amountPaise / l.quantityBase : null,
-        referenceType: "PURCHASE",
-        referenceId: purchaseId,
-        businessDate,
-        userId,
-      });
     }
 
     if (amountPaid > 0 && input.paymentMethodId) {
-      const method = getPaymentMethodOrThrow(input.paymentMethodId);
+      const method = await getPaymentMethodOrThrow(input.paymentMethodId);
       if (method.type === "CASH") {
-        recordCashTransaction({
-          businessDate,
-          txnType: "PURCHASE",
-          direction: "OUT",
-          amountPaise: amountPaid,
-          referenceType: "PURCHASE",
-          referenceId: purchaseId,
-          userId,
-        });
+        await recordCashTransaction(
+          { businessDate, txnType: "PURCHASE", direction: "OUT", amountPaise: amountPaid, referenceType: "PURCHASE", referenceId: purchaseId, userId },
+          session
+        );
       } else {
-        recordBankTransaction({
-          businessDate,
-          txnType: "DEBIT",
-          amountPaise: amountPaid,
-          description: `Purchase ${purchaseNumber}${input.invoiceNumber ? ` (Inv ${input.invoiceNumber})` : ""}`,
-          category: "SUPPLIER",
-          paymentMethodId: input.paymentMethodId,
-          userId,
-        });
+        await recordBankTransaction(
+          {
+            businessDate,
+            txnType: "DEBIT",
+            amountPaise: amountPaid,
+            description: `Purchase ${purchaseNumber}${input.invoiceNumber ? ` (Inv ${input.invoiceNumber})` : ""}`,
+            category: "SUPPLIER",
+            paymentMethodId: input.paymentMethodId,
+            userId,
+          },
+          session
+        );
       }
     }
 
-    recordAudit({
-      userId,
-      action: "PURCHASE_RECORDED",
-      entityType: "purchase_order",
-      entityId: purchaseId,
-      newValue: { purchaseNumber, total, itemCount: lines.length, pricePendingItems: lines.filter((l) => l.pricePending).length },
-    });
+    await recordAudit(
+      {
+        userId,
+        action: "PURCHASE_RECORDED",
+        entityType: "purchase_order",
+        entityId: purchaseId,
+        newValue: { purchaseNumber, total, itemCount: lines.length, pricePendingItems: lines.filter((l) => l.pricePending).length },
+      },
+      session
+    );
   });
-  txn();
 
   return getPurchaseOrThrow(purchaseId);
 }
 
-export function voidPurchase(purchaseId: string, reason: string, userId: string): PurchaseOrderRow {
+export async function voidPurchase(purchaseId: string, reason: string, userId: string): Promise<PurchaseOrderRow> {
   if (!reason) throw new ValidationError("A reason is required to void a purchase.");
-  const purchase = getPurchaseOrThrow(purchaseId);
+  const purchase = await Purchase.findById(purchaseId);
+  if (!purchase) throw new NotFoundError("Purchase");
   if (purchase.status === "VOID") throw new ConflictError("Purchase is already void.");
 
-  const items = getPurchaseItems(purchaseId) as { inventory_item_id: string; quantity_base: number }[];
   const now = nowIso();
 
-  const txn = db.transaction(() => {
-    for (const item of items) {
-      recordMovement({
-        inventoryItemId: item.inventory_item_id,
-        movementType: "RETURN",
-        direction: "OUT",
-        quantityBase: item.quantity_base,
-        referenceType: "PURCHASE_VOID",
-        referenceId: purchaseId,
-        businessDate: todayBusinessDate(),
-        userId,
-        allowNegativeStock: true,
-        reason: `Purchase ${purchase.purchase_number} voided: ${reason}`,
-      });
-    }
-
-    if (purchase.amount_paid_paise > 0 && purchase.payment_method_id) {
-      const method = getPaymentMethodOrThrow(purchase.payment_method_id);
-      if (method.type === "CASH") {
-        recordCashTransaction({
-          businessDate: todayBusinessDate(),
-          txnType: "ADJUSTMENT",
-          direction: "IN",
-          amountPaise: purchase.amount_paid_paise,
+  await withTransaction(async (session) => {
+    for (const item of purchase.purchaseItems) {
+      await recordMovement(
+        {
+          inventoryItemId: item.inventoryItemId,
+          movementType: "RETURN",
+          direction: "OUT",
+          quantityBase: item.quantityBase,
           referenceType: "PURCHASE_VOID",
           referenceId: purchaseId,
-          reason: `Refund from supplier — purchase ${purchase.purchase_number} voided`,
-          userId,
-        });
-      } else {
-        recordBankTransaction({
           businessDate: todayBusinessDate(),
-          txnType: "CREDIT",
-          amountPaise: purchase.amount_paid_paise,
-          description: `Refund — purchase ${purchase.purchase_number} voided`,
-          category: "SUPPLIER",
-          paymentMethodId: purchase.payment_method_id,
           userId,
-        });
+          allowNegativeStock: true,
+          reason: `Purchase ${purchase.purchaseNumber} voided: ${reason}`,
+        },
+        session
+      );
+    }
+
+    if (purchase.amountPaidPaise > 0 && purchase.paymentMethodId) {
+      const method = await getPaymentMethodOrThrow(purchase.paymentMethodId);
+      if (method.type === "CASH") {
+        await recordCashTransaction(
+          {
+            businessDate: todayBusinessDate(),
+            txnType: "ADJUSTMENT",
+            direction: "IN",
+            amountPaise: purchase.amountPaidPaise,
+            referenceType: "PURCHASE_VOID",
+            referenceId: purchaseId,
+            reason: `Refund from supplier — purchase ${purchase.purchaseNumber} voided`,
+            userId,
+          },
+          session
+        );
+      } else {
+        await recordBankTransaction(
+          {
+            businessDate: todayBusinessDate(),
+            txnType: "CREDIT",
+            amountPaise: purchase.amountPaidPaise,
+            description: `Refund — purchase ${purchase.purchaseNumber} voided`,
+            category: "SUPPLIER",
+            paymentMethodId: purchase.paymentMethodId,
+            userId,
+          },
+          session
+        );
       }
     }
 
-    db.prepare("UPDATE purchase_orders SET status = 'VOID', void_reason = ?, updated_at = ? WHERE id = ?").run(
-      reason,
-      now,
-      purchaseId
-    );
+    await Purchase.updateOne({ _id: purchaseId }, { status: "VOID", voidReason: reason, updatedAt: now }, { session });
 
-    recordAudit({
-      userId,
-      action: "PURCHASE_VOIDED",
-      entityType: "purchase_order",
-      entityId: purchaseId,
-      reason,
-    });
+    await recordAudit({ userId, action: "PURCHASE_VOIDED", entityType: "purchase_order", entityId: purchaseId, reason }, session);
   });
-  txn();
 
   return getPurchaseOrThrow(purchaseId);
 }

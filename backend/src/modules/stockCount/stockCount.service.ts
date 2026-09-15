@@ -1,6 +1,7 @@
-import { db } from "../../db/connection";
+import { InventoryItem, StockCount, StockCountDoc } from "../../db/models";
 import { newId, nowIso, todayBusinessDate } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
+import { withTransaction } from "../../db/mongoose";
 import { ConflictError, NotFoundError, ValidationError } from "../../utils/errors";
 import { getInventoryItemOrThrow, recordMovement } from "../inventory/inventory.service";
 
@@ -15,54 +16,75 @@ export interface StockCountRow {
   completed_at: string | null;
 }
 
-export function getStockCountOrThrow(id: string): StockCountRow {
-  const row = db.prepare("SELECT * FROM stock_counts WHERE id = ?").get(id) as StockCountRow | undefined;
-  if (!row) throw new NotFoundError("Stock count");
-  return row;
+function toRow(doc: StockCountDoc): StockCountRow {
+  return {
+    id: doc._id,
+    business_date: doc.businessDate,
+    status: doc.status,
+    created_by: doc.createdBy,
+    created_at: doc.createdAt,
+    completed_at: doc.completedAt,
+  };
 }
 
-export function getStockCountItems(stockCountId: string) {
-  return db
-    .prepare(
-      `SELECT sci.*, ii.name as item_name, ii.base_unit FROM stock_count_items sci
-       JOIN inventory_items ii ON ii.id = sci.inventory_item_id
-       WHERE sci.stock_count_id = ?`
-    )
-    .all(stockCountId);
+export async function getStockCountOrThrow(id: string): Promise<StockCountRow> {
+  const doc = await StockCount.findById(id);
+  if (!doc) throw new NotFoundError("Stock count");
+  return toRow(doc);
 }
 
-export function listStockCounts() {
-  return db.prepare("SELECT * FROM stock_counts ORDER BY created_at DESC").all() as StockCountRow[];
+export async function getStockCountItems(stockCountId: string) {
+  const doc = await StockCount.findById(stockCountId);
+  if (!doc) return [];
+  const itemIds = doc.stockCountItems.map((i) => i.inventoryItemId);
+  const items = await InventoryItem.find({ _id: { $in: itemIds } });
+  const byId = new Map(items.map((i) => [i._id, i]));
+  return doc.stockCountItems.map((sci) => {
+    const inv = byId.get(sci.inventoryItemId);
+    return {
+      id: String(sci._id),
+      stock_count_id: stockCountId,
+      inventory_item_id: sci.inventoryItemId,
+      system_qty_base: sci.systemQtyBase,
+      physical_qty_base: sci.physicalQtyBase,
+      difference_base: sci.differenceBase,
+      unit_cost_paise_per_base: sci.unitCostPaisePerBase,
+      estimated_value_diff_paise: sci.estimatedValueDiffPaise,
+      reason: sci.reason,
+      notes: sci.notes,
+      item_name: inv?.name ?? "",
+      base_unit: inv?.baseUnit ?? "",
+    };
+  });
 }
 
-export function createStockCount(userId: string, categoryFilter?: string): StockCountRow {
+export async function listStockCounts(): Promise<StockCountRow[]> {
+  const docs = await StockCount.find().sort({ createdAt: -1 });
+  return docs.map(toRow);
+}
+
+export async function createStockCount(userId: string, categoryFilter?: string): Promise<StockCountRow> {
   const id = newId("count");
   const now = nowIso();
   const businessDate = todayBusinessDate();
 
-  let sql = "SELECT * FROM inventory_items WHERE active = 1";
-  const params: unknown[] = [];
-  if (categoryFilter) {
-    sql += " AND category = ?";
-    params.push(categoryFilter);
-  }
-  const items = db.prepare(sql).all(...params) as { id: string; current_qty_base: number; avg_cost_paise_per_base: number }[];
+  const query: Record<string, unknown> = { active: true };
+  if (categoryFilter) query.category = categoryFilter;
+  const items = await InventoryItem.find(query);
 
-  const txn = db.transaction(() => {
-    db.prepare("INSERT INTO stock_counts (id, business_date, status, created_by, created_at) VALUES (?, ?, 'DRAFT', ?, ?)").run(
-      id,
-      businessDate,
-      userId,
-      now
-    );
-    for (const item of items) {
-      db.prepare(
-        `INSERT INTO stock_count_items (id, stock_count_id, inventory_item_id, system_qty_base, unit_cost_paise_per_base)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(newId("cline"), id, item.id, item.current_qty_base, item.avg_cost_paise_per_base);
-    }
+  await StockCount.create({
+    _id: id,
+    businessDate,
+    status: "DRAFT",
+    createdBy: userId,
+    createdAt: now,
+    stockCountItems: items.map((item) => ({
+      _id: newId("cline"),
+      inventoryItemId: item._id,
+      systemQtyBase: item.currentQtyBase,
+      unitCostPaisePerBase: item.avgCostPaisePerBase,
+    })),
   });
-  txn();
 
   return getStockCountOrThrow(id);
 }
@@ -74,14 +96,17 @@ export interface StockCountLineInput {
   notes?: string;
 }
 
-export function submitStockCount(stockCountId: string, lines: StockCountLineInput[], userId: string): StockCountRow {
-  const count = getStockCountOrThrow(stockCountId);
+export async function submitStockCount(stockCountId: string, lines: StockCountLineInput[], userId: string): Promise<StockCountRow> {
+  const count = await StockCount.findById(stockCountId);
+  if (!count) throw new NotFoundError("Stock count");
   if (count.status !== "DRAFT") throw new ConflictError("This stock count has already been completed.");
 
-  const txn = db.transaction(() => {
+  await withTransaction(async (session) => {
+    const doc = (await StockCount.findById(stockCountId).session(session))!;
+
     for (const line of lines) {
       if (line.physicalQtyBase < 0) throw new ValidationError("Physical quantity cannot be negative.");
-      const item = getInventoryItemOrThrow(line.inventoryItemId);
+      const item = await getInventoryItemOrThrow(line.inventoryItemId, session);
       const liveQty = item.current_qty_base;
       const difference = line.physicalQtyBase - liveQty;
 
@@ -94,38 +119,43 @@ export function submitStockCount(stockCountId: string, lines: StockCountLineInpu
 
       const estimatedValueDiff = Math.round(difference * item.avg_cost_paise_per_base);
 
-      db.prepare(
-        `UPDATE stock_count_items SET physical_qty_base = ?, difference_base = ?, estimated_value_diff_paise = ?, reason = ?, notes = ?
-         WHERE stock_count_id = ? AND inventory_item_id = ?`
-      ).run(line.physicalQtyBase, difference, estimatedValueDiff, line.reason ?? null, line.notes ?? null, stockCountId, line.inventoryItemId);
+      const sub = doc.stockCountItems.find((s) => s.inventoryItemId === line.inventoryItemId);
+      if (sub) {
+        sub.physicalQtyBase = line.physicalQtyBase;
+        sub.differenceBase = difference;
+        sub.estimatedValueDiffPaise = estimatedValueDiff;
+        sub.reason = (line.reason as typeof sub.reason) ?? null;
+        sub.notes = line.notes ?? null;
+      }
 
       if (difference !== 0) {
-        recordMovement({
-          inventoryItemId: line.inventoryItemId,
-          movementType: "STOCK_ADJUSTMENT",
-          direction: difference > 0 ? "IN" : "OUT",
-          quantityBase: Math.abs(difference),
-          referenceType: "STOCK_COUNT",
-          referenceId: stockCountId,
-          reason: `${line.reason}${line.notes ? `: ${line.notes}` : ""}`,
-          businessDate: count.business_date,
-          userId,
-          allowNegativeStock: true,
-        });
+        await recordMovement(
+          {
+            inventoryItemId: line.inventoryItemId,
+            movementType: "STOCK_ADJUSTMENT",
+            direction: difference > 0 ? "IN" : "OUT",
+            quantityBase: Math.abs(difference),
+            referenceType: "STOCK_COUNT",
+            referenceId: stockCountId,
+            reason: `${line.reason}${line.notes ? `: ${line.notes}` : ""}`,
+            businessDate: count.businessDate,
+            userId,
+            allowNegativeStock: true,
+          },
+          session
+        );
       }
     }
 
-    db.prepare("UPDATE stock_counts SET status = 'COMPLETED', completed_at = ? WHERE id = ?").run(nowIso(), stockCountId);
+    doc.status = "COMPLETED";
+    doc.completedAt = nowIso();
+    await doc.save({ session });
 
-    recordAudit({
-      userId,
-      action: "STOCK_COUNT_COMPLETED",
-      entityType: "stock_count",
-      entityId: stockCountId,
-      newValue: { lineCount: lines.length },
-    });
+    await recordAudit(
+      { userId, action: "STOCK_COUNT_COMPLETED", entityType: "stock_count", entityId: stockCountId, newValue: { lineCount: lines.length } },
+      session
+    );
   });
-  txn();
 
   return getStockCountOrThrow(stockCountId);
 }

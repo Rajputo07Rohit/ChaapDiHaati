@@ -148,6 +148,7 @@ function UsersSection() {
             <option value="STAFF">Staff</option>
             <option value="MANAGER">Manager</option>
             <option value="ADMIN">Admin</option>
+            <option value="RIDER">Rider</option>
           </Select>
           <Button className="w-full" disabled={!username || !password || !fullName || createMutation.isPending} onClick={() => createMutation.mutate()}>
             {createMutation.isPending ? "Creating…" : "Create User"}

@@ -7,9 +7,14 @@ import * as staffService from "./staff.service";
 
 export const staffRouter = Router();
 
-staffRouter.get("/", requireAuth, isManagerUp, (_req, res) => {
-  res.json({ staff: staffService.listStaff(), monthlySalaryTotalPaise: staffService.monthlySalaryTotal() });
-});
+staffRouter.get(
+  "/",
+  requireAuth,
+  isManagerUp,
+  asyncHandler(async (_req, res) => {
+    res.json({ staff: await staffService.listStaff(), monthlySalaryTotalPaise: await staffService.monthlySalaryTotal() });
+  })
+);
 
 const staffSchema = z.object({
   fullName: z.string().min(1),
@@ -27,7 +32,7 @@ staffRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = staffSchema.parse(req.body);
-    const staff = staffService.createStaff(input, req.user!.id);
+    const staff = await staffService.createStaff(input, req.user!.id);
     res.status(201).json({ staff });
   })
 );
@@ -40,7 +45,7 @@ staffRouter.patch(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = updateSchema.parse(req.body);
-    const staff = staffService.updateStaff(req.params.id, input, req.user!.id);
+    const staff = await staffService.updateStaff(req.params.id, input, req.user!.id);
     res.json({ staff });
   })
 );

@@ -1,6 +1,6 @@
 import "express";
 
-export type Role = "ADMIN" | "MANAGER" | "STAFF";
+export type Role = "ADMIN" | "MANAGER" | "STAFF" | "RIDER";
 
 declare global {
   namespace Express {

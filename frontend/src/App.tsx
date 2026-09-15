@@ -17,13 +17,20 @@ import { Reports } from "./pages/Reports";
 import { Staff } from "./pages/Staff";
 import { SettingsPage } from "./pages/Settings";
 import { AuditLog } from "./pages/AuditLog";
+import { RiderDashboard } from "./pages/RiderDashboard";
 import { Role } from "./api/types";
+
+/** Where a logged-in user lands when they hit a route their role can't use. */
+function RoleHome() {
+  const { user } = useAuth();
+  return <Navigate to={user?.role === "RIDER" ? "/rider" : "/pos"} replace />;
+}
 
 function RequireAuth({ children, roles }: { children: JSX.Element; roles?: Role[] }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
-  if (roles && !roles.includes(user.role)) return <Navigate to="/pos" replace />;
+  if (roles && !roles.includes(user.role)) return <RoleHome />;
   return children;
 }
 
@@ -31,9 +38,10 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/rider" element={<RequireAuth roles={["RIDER"]}><RiderDashboard /></RequireAuth>} />
       <Route
         element={
-          <RequireAuth>
+          <RequireAuth roles={["ADMIN", "MANAGER", "STAFF"]}>
             <Layout />
           </RequireAuth>
         }
@@ -53,9 +61,9 @@ export default function App() {
         <Route path="/staff" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Staff /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
         <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
-        <Route path="/" element={<Navigate to="/pos" replace />} />
+        <Route path="/" element={<RoleHome />} />
       </Route>
-      <Route path="*" element={<Navigate to="/pos" replace />} />
+      <Route path="*" element={<RoleHome />} />
     </Routes>
   );
 }

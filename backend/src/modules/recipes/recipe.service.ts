@@ -1,4 +1,4 @@
-import { db } from "../../db/connection";
+import { RecipeVersion } from "../../db/models";
 import { getInventoryItemOrThrow } from "../inventory/inventory.service";
 
 export interface RecipeVersionRow {
@@ -21,32 +21,47 @@ export interface RecipeItemRow {
   optional: number;
 }
 
-const findEffectiveVersionStmt = db.prepare(`
-  SELECT * FROM recipe_versions
-  WHERE menu_item_id = ? AND price_type = ?
-    AND effective_from <= ?
-    AND (effective_to IS NULL OR effective_to > ?)
-  ORDER BY version DESC
-  LIMIT 1
-`);
-
-const recipeItemsStmt = db.prepare("SELECT * FROM recipe_items WHERE recipe_version_id = ?");
-
 /**
  * Finds the recipe version that was in effect at a given point in time.
  * This is how historical orders always cost against the recipe that was
  * actually used, even after the recipe changes later.
  */
-export function getEffectiveRecipeVersion(
+export async function getEffectiveRecipeVersion(
   menuItemId: string,
   priceType: "HALF" | "FULL" | "SINGLE",
   atIso: string
-): RecipeVersionRow | undefined {
-  return findEffectiveVersionStmt.get(menuItemId, priceType, atIso, atIso) as RecipeVersionRow | undefined;
+): Promise<RecipeVersionRow | undefined> {
+  const doc = await RecipeVersion.findOne({
+    menuItemId,
+    priceType,
+    effectiveFrom: { $lte: atIso },
+    $or: [{ effectiveTo: null }, { effectiveTo: { $gt: atIso } }],
+  }).sort({ version: -1 });
+
+  if (!doc) return undefined;
+  return {
+    id: doc._id,
+    menu_item_id: doc.menuItemId,
+    price_type: doc.priceType,
+    version: doc.version,
+    effective_from: doc.effectiveFrom,
+    effective_to: doc.effectiveTo,
+    notes: doc.notes,
+  };
 }
 
-export function getRecipeItems(recipeVersionId: string): RecipeItemRow[] {
-  return recipeItemsStmt.all(recipeVersionId) as RecipeItemRow[];
+export async function getRecipeItems(recipeVersionId: string): Promise<RecipeItemRow[]> {
+  const doc = await RecipeVersion.findById(recipeVersionId);
+  if (!doc) return [];
+  return doc.recipeItems.map((ri) => ({
+    id: String(ri._id),
+    recipe_version_id: recipeVersionId,
+    inventory_item_id: ri.inventoryItemId,
+    quantity_base: ri.quantityBase,
+    wastage_pct: ri.wastagePct,
+    yield_pct: ri.yieldPct,
+    optional: ri.optional ? 1 : 0,
+  }));
 }
 
 export interface RecipeCostBreakdownLine {
@@ -68,13 +83,13 @@ export interface RecipeCostResult {
  * average costs — used for menu costing / pricing screens, not for
  * historical order COGS (which is computed at consumption time instead).
  */
-export function computeRecipeCost(recipeVersionId: string): RecipeCostResult {
-  const items = getRecipeItems(recipeVersionId);
+export async function computeRecipeCost(recipeVersionId: string): Promise<RecipeCostResult> {
+  const items = await getRecipeItems(recipeVersionId);
   const lines: RecipeCostBreakdownLine[] = [];
   let total = 0;
 
   for (const ri of items) {
-    const invItem = getInventoryItemOrThrow(ri.inventory_item_id);
+    const invItem = await getInventoryItemOrThrow(ri.inventory_item_id);
     const effectiveQty = (ri.quantity_base * (1 + ri.wastage_pct / 100)) / (ri.yield_pct / 100);
     const costPaise = Math.round(effectiveQty * invItem.avg_cost_paise_per_base);
     lines.push({

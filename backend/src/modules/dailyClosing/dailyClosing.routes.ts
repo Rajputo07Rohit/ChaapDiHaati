@@ -14,8 +14,8 @@ dailyClosingRouter.get(
   isManagerUp,
   asyncHandler(async (req, res) => {
     const businessDate = (req.query.businessDate as string) || todayBusinessDate();
-    const closing = closingService.getClosing(businessDate);
-    const preview = closingService.buildClosingSnapshot(businessDate);
+    const closing = await closingService.getClosing(businessDate);
+    const preview = await closingService.buildClosingSnapshot(businessDate);
     res.json({ closing: closing ?? null, preview });
   })
 );
@@ -29,7 +29,7 @@ dailyClosingRouter.post(
   asyncHandler(async (req, res) => {
     const input = openSchema.parse(req.body);
     const businessDate = input.businessDate || todayBusinessDate();
-    const closing = closingService.openBusinessDay(businessDate, input.openingCashPaise, req.user!.id);
+    const closing = await closingService.openBusinessDay(businessDate, input.openingCashPaise, req.user!.id);
     res.status(201).json({ closing });
   })
 );
@@ -48,7 +48,7 @@ dailyClosingRouter.post(
   asyncHandler(async (req, res) => {
     const input = closeSchema.parse(req.body);
     const businessDate = input.businessDate || todayBusinessDate();
-    const closing = closingService.closeDay({ ...input, businessDate, userId: req.user!.id });
+    const closing = await closingService.closeDay({ ...input, businessDate, userId: req.user!.id });
     res.json({ closing });
   })
 );
@@ -61,7 +61,7 @@ dailyClosingRouter.post(
   isAdmin,
   asyncHandler(async (req, res) => {
     const input = reopenSchema.parse(req.body);
-    const closing = closingService.reopenDay(input.businessDate, input.reason, req.user!.id);
+    const closing = await closingService.reopenDay(input.businessDate, input.reason, req.user!.id);
     res.json({ closing });
   })
 );

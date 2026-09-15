@@ -2,8 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 import { UnauthorizedError } from "../utils/errors";
-import { db } from "../db/connection";
-import { Role } from "../types/express";
+import { User } from "../db/models";
 
 interface JwtPayload {
   sub: string;
@@ -27,21 +26,17 @@ export function clearTokenCookie(res: Response) {
   res.clearCookie(COOKIE_NAME);
 }
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const token = req.cookies?.[COOKIE_NAME] || bearerToken(req);
   if (!token) return next(new UnauthorizedError());
 
   try {
     const payload = jwt.verify(token, env.jwtSecret) as JwtPayload;
-    const user = db
-      .prepare("SELECT id, username, full_name as fullName, role, active FROM users WHERE id = ?")
-      .get(payload.sub) as
-      | { id: string; username: string; fullName: string; role: Role; active: number }
-      | undefined;
+    const user = await User.findById(payload.sub);
 
     if (!user || !user.active) return next(new UnauthorizedError("Session is no longer valid."));
 
-    req.user = { id: user.id, username: user.username, fullName: user.fullName, role: user.role };
+    req.user = { id: user._id, username: user.username, fullName: user.fullName, role: user.role };
     next();
   } catch {
     next(new UnauthorizedError("Session expired. Please log in again."));
