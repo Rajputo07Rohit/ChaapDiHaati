@@ -215,7 +215,7 @@ export function POS() {
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] xl:grid-cols-[1fr_380px] gap-6 h-full">
       <div className="min-w-0">
         <PageHeader title="POS / New Order" />
-        <div className="flex gap-2 overflow-x-auto pb-3 mb-4 border-b border-slate-200">
+        <div className="flex flex-wrap gap-2 pb-3 mb-4 border-b border-slate-200">
           {categories.map((cat) => (
             <button
               key={cat.id}
