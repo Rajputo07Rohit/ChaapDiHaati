@@ -8,7 +8,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from ".
 import { assertBusinessDateWritable } from "../../utils/businessDate";
 import { getCurrentPrice, getMenuItemOrThrow } from "../menu/menu.service";
 import { getEffectiveRecipeVersion, getRecipeItems } from "../recipes/recipe.service";
-import { recordMovement } from "../inventory/inventory.service";
+import { recordMovement, getInventoryItemOrThrow } from "../inventory/inventory.service";
 import { recordCashTransaction } from "../cash/cash.service";
 import { recordBankTransaction } from "../bank/bank.service";
 import { getPaymentMethodOrThrow } from "../paymentMethods/paymentMethods.service";
@@ -286,6 +286,35 @@ function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discount
   return { items, discounts };
 }
 
+/**
+ * Auto-assignment for delivery orders: whichever active rider currently has
+ * the fewest orders still in flight gets the next one — keeps it fair as
+ * more riders are added, and needs no owner configuration. Returns null
+ * (order stays unassigned, same as before) if there are no active riders
+ * yet — staff can still assign one by hand from the Orders page.
+ */
+async function pickLeastBusyRider(): Promise<string | null> {
+  const riders = await User.find({ role: "RIDER", active: true });
+  if (riders.length === 0) return null;
+
+  const counts = await Order.aggregate([
+    { $match: { assignedRiderId: { $ne: null }, status: { $nin: ["DELIVERED", "CANCELLED", "REFUNDED", "COMPLETED"] } } },
+    { $group: { _id: "$assignedRiderId", count: { $sum: 1 } } },
+  ]);
+  const countMap = new Map<string, number>(counts.map((c) => [c._id as string, c.count as number]));
+
+  let best = riders[0];
+  let bestCount = countMap.get(String(riders[0]._id)) ?? 0;
+  for (const r of riders.slice(1)) {
+    const c = countMap.get(String(r._id)) ?? 0;
+    if (c < bestCount) {
+      best = r;
+      bestCount = c;
+    }
+  }
+  return String(best._id);
+}
+
 export async function createOrder(input: CreateOrderInput, userId: string, role: Role): Promise<OrderRow> {
   if (!input.items || input.items.length === 0) {
     throw new ValidationError("An order must have at least one item.");
@@ -301,6 +330,7 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
 
   const now = nowIso();
   const status: OrderStatus = input.asDraft ? "DRAFT" : "CONFIRMED";
+  const autoAssignedRiderId = input.orderType === "DELIVERY" && !input.asDraft ? await pickLeastBusyRider() : null;
 
   const orderId = await withTransaction(async (session) => {
     const orderNumber = await nextSequence("order_number", session);
@@ -333,7 +363,7 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
           customerName: input.customerName ?? null,
           customerPhone: input.customerPhone ?? null,
           deliveryAddress: input.deliveryAddress ?? null,
-          assignedRiderId: null,
+          assignedRiderId: autoAssignedRiderId,
           subtotalPaise: subtotal,
           discountPaise: orderDiscountPaise,
           discountType: orderDiscountType,
@@ -364,6 +394,21 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
       },
       session
     );
+
+    if (autoAssignedRiderId) {
+      await recordAudit(
+        {
+          userId,
+          action: "RIDER_ASSIGNED",
+          entityType: "sales_order",
+          entityId: newOrderId,
+          oldValue: { assignedRiderId: null },
+          newValue: { assignedRiderId: autoAssignedRiderId, auto: true },
+          reason: "Auto-assigned to the least-busy active rider on order creation",
+        },
+        session
+      );
+    }
 
     return newOrderId;
   });
@@ -634,16 +679,14 @@ async function finalizeOrder(
   role: Role,
   session: ClientSession,
   opts: { allowNegativeStock?: boolean; overrideReason?: string } = {}
-): Promise<void> {
-  if (opts.allowNegativeStock && role !== "ADMIN") {
-    throw new ForbiddenError("Only an Admin can override an insufficient-stock warning.");
-  }
-  if (opts.allowNegativeStock && !opts.overrideReason) {
-    throw new ValidationError("A reason is required to override insufficient stock.");
-  }
-
+): Promise<string[]> {
   const isClosedDay = await assertBusinessDateWritable(doc.businessDate, role);
   const now = nowIso();
+  // Running out of a recipe ingredient never blocks the sale — it just goes
+  // negative and gets flagged back to the till as a warning, so staff can
+  // still ring up the order and restock later instead of turning the
+  // customer away.
+  const stockWarnings: string[] = [];
 
   for (const item of doc.items) {
     if (item.status !== "ACTIVE") continue;
@@ -675,12 +718,17 @@ async function finalizeOrder(
             referenceId: doc._id,
             businessDate: doc.businessDate,
             userId,
-            allowNegativeStock: !!opts.allowNegativeStock,
-            reason: opts.allowNegativeStock ? opts.overrideReason : null,
+            allowNegativeStock: true,
+            reason: opts.overrideReason ?? "Sold out of stock — allowed through, flagged for restock.",
           },
           session
         );
         cogsTotal += result.totalCostPaise ?? 0;
+        if (result.wentNegative) {
+          const invItem = await getInventoryItemOrThrow(ri.inventory_item_id, session);
+          const label = `${item.itemNameSnapshot}: ${invItem.name} is now short (${result.resultingQtyBase}${invItem.base_unit})`;
+          if (!stockWarnings.includes(label)) stockWarnings.push(label);
+        }
       }
     }
 
@@ -704,11 +752,18 @@ async function finalizeOrder(
     },
     session
   );
+
+  return stockWarnings;
 }
 
 /** Counter-sale path: pay in full and finish in one step (dine-in/takeaway/
  * online, or a delivery order staff decide to close out directly). */
-export async function completeOrder(orderId: string, input: CompleteOrderInput, userId: string, role: Role): Promise<OrderRow> {
+export async function completeOrder(
+  orderId: string,
+  input: CompleteOrderInput,
+  userId: string,
+  role: Role
+): Promise<{ order: OrderRow; stockWarnings: string[] }> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
   if (!COMPLETABLE_STATUSES.includes(order.status)) {
@@ -724,16 +779,17 @@ export async function completeOrder(orderId: string, input: CompleteOrderInput, 
     throw new ValidationError(`Payment total does not match the order total. Order: ${order.netTotalPaise} paise, received: ${totalPaid} paise.`);
   }
 
+  let stockWarnings: string[] = [];
   await withTransaction(async (session) => {
     const doc = (await Order.findById(orderId).session(session))!;
     if (newPayments.length > 0) {
       await postPayments(doc, newPayments, userId, session);
       doc.paymentStatus = "PAID";
     }
-    await finalizeOrder(doc, userId, role, session, { allowNegativeStock: input.allowNegativeStock, overrideReason: input.overrideReason });
+    stockWarnings = await finalizeOrder(doc, userId, role, session, { overrideReason: input.overrideReason });
   });
 
-  return getOrderOrThrow(orderId);
+  return { order: await getOrderOrThrow(orderId), stockWarnings };
 }
 
 /** Single-step forward transitions a staff member drives by hand: kitchen
@@ -779,7 +835,7 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus, us
  * out with money still outstanding. Consumes stock/COGS and completes the
  * order in the same step as marking it delivered.
  */
-export async function markDelivered(orderId: string, userId: string, role: Role): Promise<OrderRow> {
+export async function markDelivered(orderId: string, userId: string, role: Role): Promise<{ order: OrderRow; stockWarnings: string[] }> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
   if (order.status !== "OUT_FOR_DELIVERY") {
@@ -796,15 +852,16 @@ export async function markDelivered(orderId: string, userId: string, role: Role)
 
   const now = nowIso();
 
+  let stockWarnings: string[] = [];
   await withTransaction(async (session) => {
     const doc = (await Order.findById(orderId).session(session))!;
     doc.deliveredAt = now;
     doc.updatedAt = now;
     await recordAudit({ userId, action: "ORDER_DELIVERED", entityType: "sales_order", entityId: orderId, newValue: { deliveredAt: now } }, session);
-    await finalizeOrder(doc, userId, role, session);
+    stockWarnings = await finalizeOrder(doc, userId, role, session);
   });
 
-  return getOrderOrThrow(orderId);
+  return { order: await getOrderOrThrow(orderId), stockWarnings };
 }
 
 export async function refundOrder(

@@ -186,7 +186,7 @@ describe("Order calculation, discounts, payments", () => {
   it("supports split payment across two methods summing exactly to the total", async () => {
     const { menuItemId } = await makeMenuItemWithRecipe({ priceType: "SINGLE", pricePaise: 10000, ingredientQtyBase: 1, ingredientCostPaisePerBase: 1, userId: ADMIN });
     const order = await createOrder({ orderType: "TAKEAWAY", items: [{ menuItemId, priceType: "SINGLE", quantity: 1 }], businessDate: "2020-01-07" }, ADMIN, "ADMIN");
-    const completed = await completeOrder(
+    const { order: completed } = await completeOrder(
       order.id,
       { payments: [{ paymentMethodId: CASH, amountPaise: 4000 }, { paymentMethodId: ONLINE, amountPaise: 6000 }] },
       ADMIN,
@@ -393,7 +393,7 @@ describe("Delivery + COD payment flow", () => {
     const paid = await recordPayment(order.id, [{ paymentMethodId: CASH, amountPaise: 50000 }], rider, "RIDER");
     expect(paid.payment_status).toBe("PAID");
 
-    const delivered = await markDelivered(order.id, rider, "RIDER");
+    const { order: delivered } = await markDelivered(order.id, rider, "RIDER");
     expect(delivered.status).toBe("COMPLETED");
     expect(delivered.payment_status).toBe("PAID");
     expect((await getCashLedgerSummary(date)).expectedCashPaise).toBe(cashBefore + 50000);
@@ -408,7 +408,7 @@ describe("Delivery + COD payment flow", () => {
     expect(paid.payment_status).toBe("PAID");
 
     await dispatchToRider(order.id, rider);
-    const delivered = await markDelivered(order.id, rider, "RIDER");
+    const { order: delivered } = await markDelivered(order.id, rider, "RIDER");
     expect(delivered.status).toBe("COMPLETED");
   });
 
@@ -426,7 +426,7 @@ describe("Delivery + COD payment flow", () => {
     const afterCash = await recordPayment(order.id, [{ paymentMethodId: CASH, amountPaise: 30000 }], rider, "RIDER");
     expect(afterCash.payment_status).toBe("PAID");
 
-    const delivered = await markDelivered(order.id, rider, "RIDER");
+    const { order: delivered } = await markDelivered(order.id, rider, "RIDER");
     expect(delivered.status).toBe("COMPLETED");
   });
 

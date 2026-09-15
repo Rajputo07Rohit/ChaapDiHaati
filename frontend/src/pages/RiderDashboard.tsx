@@ -41,9 +41,12 @@ function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: s
   });
 
   const deliverMutation = useMutation({
-    mutationFn: () => api.post(`/orders/${order.id}/deliver`),
-    onSuccess: () => {
+    mutationFn: () => api.post<{ stockWarnings?: string[] }>(`/orders/${order.id}/deliver`),
+    onSuccess: (res) => {
       toast.success("Order delivered");
+      for (const w of res.stockWarnings ?? []) {
+        toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+      }
       queryClient.invalidateQueries({ queryKey: ["rider-orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not mark delivered"),

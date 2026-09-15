@@ -23,6 +23,11 @@ export function Orders() {
   const [recordPayOpen, setRecordPayOpen] = useState(false);
   const [recordPayAmount, setRecordPayAmount] = useState("");
   const [recordPayMethodId, setRecordPayMethodId] = useState("");
+  const [refundTarget, setRefundTarget] = useState<SalesOrder | null>(null);
+  const [refundType, setRefundType] = useState<"FULL" | "PARTIAL">("FULL");
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [refundMethodId, setRefundMethodId] = useState("");
 
   const { data: pmData } = useQuery({
     queryKey: ["payment-methods"],
@@ -67,9 +72,32 @@ export function Orders() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not collect payment"),
   });
 
-  // Cancel and rider-assignment are open to any signed-in staff-side role
+  const refundMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/orders/${refundTarget!.id}/refund`, {
+        amountPaise: Math.round(parseFloat(refundAmount) * 100),
+        reason: refundReason,
+        refundType,
+        paymentMethodId: refundMethodId,
+      }),
+    onSuccess: () => {
+      toast.success("Refund recorded");
+      setRefundTarget(null);
+      setRefundAmount("");
+      setRefundReason("");
+      setRefundMethodId("");
+      setRefundType("FULL");
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record refund"),
+  });
+
+  // Refund is Admin/Manager only (real money reversal) — Cancel and
+  // rider-assignment are open to any signed-in staff-side role
   // (Admin/Manager/Staff) — Riders never reach this page at all.
   const canManage = user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "STAFF";
+  const canRefund = user?.role === "ADMIN" || user?.role === "MANAGER";
 
   const { data: riderOptions } = useQuery({
     queryKey: ["rider-options"],
@@ -269,6 +297,20 @@ export function Orders() {
                     Mark Delivered
                   </Button>
                 )}
+                {canRefund && detail.order.status === "COMPLETED" && (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => {
+                      setRefundTarget(detail.order);
+                      setRefundType("FULL");
+                      setRefundAmount((detail.order.net_total_paise / 100).toFixed(2));
+                      setRefundMethodId(detail.order.payments?.[0]?.payment_method_id ?? pmData?.methods[0]?.id ?? "");
+                    }}
+                  >
+                    Refund
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -436,6 +478,61 @@ export function Orders() {
             onClick={() => recordPaymentMutation.mutate()}
           >
             {recordPaymentMutation.isPending ? "Recording…" : "Confirm Payment Received"}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!refundTarget} onClose={() => setRefundTarget(null)} title={`Refund — Order #${refundTarget?.order_number}`}>
+        <div className="space-y-3">
+          <p className="text-sm text-slate-500">
+            This order is already completed — a refund reverses the sale and cash/bank ledger correctly, instead of cancelling (which is only for
+            orders that were never paid).
+          </p>
+          <div className="text-sm text-slate-500">
+            Order total: <span className="font-semibold text-slate-900">{refundTarget && formatPaise(refundTarget.net_total_paise)}</span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setRefundType("FULL");
+                if (refundTarget) setRefundAmount((refundTarget.net_total_paise / 100).toFixed(2));
+              }}
+              className={`flex-1 py-1.5 rounded-lg text-sm font-medium ${refundType === "FULL" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-600"}`}
+            >
+              Full refund
+            </button>
+            <button
+              onClick={() => setRefundType("PARTIAL")}
+              className={`flex-1 py-1.5 rounded-lg text-sm font-medium ${refundType === "PARTIAL" ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-600"}`}
+            >
+              Partial refund
+            </button>
+          </div>
+          <Input
+            type="number"
+            step="0.01"
+            placeholder="Refund amount (₹)"
+            value={refundAmount}
+            onChange={(e) => setRefundAmount(e.target.value)}
+            disabled={refundType === "FULL"}
+            className="w-full"
+          />
+          <Select value={refundMethodId} onChange={(e) => setRefundMethodId(e.target.value)} className="w-full">
+            <option value="">Refund via…</option>
+            {(pmData?.methods ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+          <Input placeholder="Reason (required)" value={refundReason} onChange={(e) => setRefundReason(e.target.value)} className="w-full" />
+          <Button
+            variant="danger"
+            className="w-full"
+            disabled={!refundReason || !refundMethodId || !refundAmount || refundMutation.isPending}
+            onClick={() => refundMutation.mutate()}
+          >
+            {refundMutation.isPending ? "Processing…" : "Confirm Refund"}
           </Button>
         </div>
       </Modal>

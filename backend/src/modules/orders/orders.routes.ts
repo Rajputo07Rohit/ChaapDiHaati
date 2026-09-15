@@ -114,8 +114,8 @@ ordersRouter.post(
   isAnyRole,
   asyncHandler(async (req, res) => {
     const input = completeSchema.parse(req.body);
-    const order = await ordersService.completeOrder(req.params.id, input, req.user!.id, req.user!.role);
-    res.json({ order: await ordersService.getOrderFull(order.id) });
+    const { order, stockWarnings } = await ordersService.completeOrder(req.params.id, input, req.user!.id, req.user!.role);
+    res.json({ order: await ordersService.getOrderFull(order.id), stockWarnings });
   })
 );
 
@@ -157,8 +157,8 @@ ordersRouter.post(
   requireAuth,
   isAnyRoleOrRider,
   asyncHandler(async (req, res) => {
-    const order = await ordersService.markDelivered(req.params.id, req.user!.id, req.user!.role);
-    res.json({ order: await ordersService.getOrderFull(order.id) });
+    const { order, stockWarnings } = await ordersService.markDelivered(req.params.id, req.user!.id, req.user!.role);
+    res.json({ order: await ordersService.getOrderFull(order.id), stockWarnings });
   })
 );
 

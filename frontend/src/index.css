@@ -114,11 +114,14 @@ body {
   user-select: none;
   transition: transform 80ms ease, background-color 80ms ease;
 }
+/* Relative brightness, not a fixed light color — a hardcoded background here
+   would wash out buttons that are already colored (e.g. a selected/active
+   state in brand-600 orange), turning their text unreadable on hover. */
 .tap-btn:hover {
-  background-color: var(--brand-50);
+  filter: brightness(0.97);
 }
 .tap-btn:active {
   transform: scale(0.96);
-  background-color: var(--brand-100);
+  filter: brightness(0.93);
 }
 

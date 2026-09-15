@@ -162,10 +162,13 @@ export function POS() {
   const createAndCompleteMutation = useMutation({
     mutationFn: async (vars: { payments: { paymentMethodId: string; amountPaise: number }[] }) => {
       const created = await api.post<{ order: SalesOrder }>("/orders", buildOrderPayload());
-      return api.post<{ order: SalesOrder }>(`/orders/${created.order.id}/complete`, { payments: vars.payments });
+      return api.post<{ order: SalesOrder; stockWarnings?: string[] }>(`/orders/${created.order.id}/complete`, { payments: vars.payments });
     },
     onSuccess: (res) => {
       toast.success(`Order #${res.order.order_number} completed`);
+      for (const w of res.stockWarnings ?? []) {
+        toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+      }
       printReceipt(res.order);
       setCompletedOrder(res.order);
       resetCart();
@@ -181,13 +184,13 @@ export function POS() {
 
   // Delivery orders don't get paid at the counter — COD is collected by the
   // rider on delivery, and any prepayment is recorded afterward from the
-  // Orders page. So checkout for a delivery order just creates it and sends
-  // it to the kitchen; every other order type keeps the existing
-  // create-and-pay-in-one-step flow above.
-  const sendToKitchenMutation = useMutation({
+  // Orders page. So checkout for a delivery order just creates it, unpaid,
+  // ready to assign to a rider; every other order type keeps the existing
+  // create-and-pay-in-one-step flow above. No kitchen workflow involved.
+  const createDeliveryOrderMutation = useMutation({
     mutationFn: () => api.post<{ order: SalesOrder }>("/orders", buildOrderPayload()),
     onSuccess: (res) => {
-      toast.success(`Order #${res.order.order_number} sent to kitchen`);
+      toast.success(`Order #${res.order.order_number} created — assign a rider from Orders`);
       resetCart();
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
@@ -224,8 +227,17 @@ export function POS() {
             const full = item.prices.find((p) => p.price_type === "FULL");
             const single = item.prices.find((p) => p.price_type === "SINGLE");
             const unavailable = item.status !== "ACTIVE";
+            const inCartHalf = cart.some((l) => l.menuItemId === item.id && l.priceType === "HALF");
+            const inCartFull = cart.some((l) => l.menuItemId === item.id && l.priceType === "FULL");
+            const inCartSingle = cart.some((l) => l.menuItemId === item.id && l.priceType === "SINGLE");
+            const itemInCart = inCartHalf || inCartFull || inCartSingle;
             return (
-              <div key={item.id} className={`bg-white border border-slate-200 rounded-lg p-3 ${unavailable ? "opacity-50" : ""}`}>
+              <div
+                key={item.id}
+                className={`bg-white border rounded-lg p-3 transition-colors ${unavailable ? "opacity-50" : ""} ${
+                  itemInCart ? "border-brand-400 ring-1 ring-brand-300" : "border-slate-200"
+                }`}
+              >
                 <div className="font-medium text-sm text-slate-800 mb-2">{item.name}</div>
                 {unavailable && <Badge tone="red">Unavailable</Badge>}
                 {!unavailable && (
@@ -233,27 +245,33 @@ export function POS() {
                     {half && (
                       <button
                         onClick={() => addToCart(item.id, item.name, currentCategory!.name, "HALF", item.half_label, half.price_paise)}
-                        className="tap-btn w-full flex items-center justify-between text-xs bg-slate-50 rounded px-2 py-1.5"
+                        className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
+                          inCartHalf ? "bg-brand-600 text-white" : "bg-slate-50"
+                        }`}
                       >
-                        <span className="text-slate-500">{item.half_label}</span>
+                        <span className={inCartHalf ? "text-white/80" : "text-slate-500"}>{item.half_label}</span>
                         <span className="font-semibold">{formatPaise(half.price_paise)}</span>
                       </button>
                     )}
                     {full && (
                       <button
                         onClick={() => addToCart(item.id, item.name, currentCategory!.name, "FULL", item.full_label, full.price_paise)}
-                        className="tap-btn w-full flex items-center justify-between text-xs bg-slate-50 rounded px-2 py-1.5"
+                        className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
+                          inCartFull ? "bg-brand-600 text-white" : "bg-slate-50"
+                        }`}
                       >
-                        <span className="text-slate-500">{item.full_label}</span>
+                        <span className={inCartFull ? "text-white/80" : "text-slate-500"}>{item.full_label}</span>
                         <span className="font-semibold">{formatPaise(full.price_paise)}</span>
                       </button>
                     )}
                     {single && (
                       <button
                         onClick={() => addToCart(item.id, item.name, currentCategory!.name, "SINGLE", "Add", single.price_paise)}
-                        className="tap-btn w-full flex items-center justify-between text-xs bg-slate-50 rounded px-2 py-1.5"
+                        className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
+                          inCartSingle ? "bg-brand-600 text-white" : "bg-slate-50"
+                        }`}
                       >
-                        <span className="text-slate-500">Add</span>
+                        <span className={inCartSingle ? "text-white/80" : "text-slate-500"}>Add</span>
                         <span className="font-semibold">{formatPaise(single.price_paise)}</span>
                       </button>
                     )}
@@ -484,6 +502,28 @@ export function POS() {
               )}
             </div>
           )}
+          {orderType === "DELIVERY" && (
+            <div className="space-y-1.5 border border-slate-200 rounded-lg p-2.5 bg-slate-50">
+              <label className="text-xs font-medium text-slate-500">Customer details (needed for the rider)</label>
+              <div className="flex gap-1.5">
+                <Input placeholder="Name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="flex-1" />
+                <Input
+                  placeholder="Phone / WhatsApp number"
+                  type="tel"
+                  inputMode="numeric"
+                  value={customerPhone}
+                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
+              <Input
+                placeholder="Delivery address"
+                value={deliveryAddress}
+                onChange={(e) => setDeliveryAddress(e.target.value)}
+                className="w-full"
+              />
+            </div>
+          )}
           <Input placeholder="Notes / special instructions" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full" />
           <div className="flex justify-between text-sm pt-1">
             <span className="text-slate-500">Subtotal</span>
@@ -507,10 +547,10 @@ export function POS() {
           </div>
           <Button
             className="w-full py-2.5"
-            disabled={cart.length === 0 || sendToKitchenMutation.isPending}
-            onClick={() => (orderType === "DELIVERY" ? sendToKitchenMutation.mutate() : setPayOpen(true))}
+            disabled={cart.length === 0 || createDeliveryOrderMutation.isPending}
+            onClick={() => (orderType === "DELIVERY" ? createDeliveryOrderMutation.mutate() : setPayOpen(true))}
           >
-            {orderType === "DELIVERY" ? (sendToKitchenMutation.isPending ? "Sending…" : "Send to Kitchen") : "Charge & Complete"}
+            {orderType === "DELIVERY" ? (createDeliveryOrderMutation.isPending ? "Creating…" : "Create Order") : "Charge & Complete"}
           </Button>
           {cart.length > 0 && (
             <button onClick={() => setCancelCartOpen(true)} className="w-full text-center text-xs text-rose-500 hover:text-rose-600 pt-1">
