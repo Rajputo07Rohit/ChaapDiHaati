@@ -329,8 +329,12 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
   const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(resolvedItems, orderDiscountType, orderDiscountValue);
 
   const now = nowIso();
-  const status: OrderStatus = input.asDraft ? "DRAFT" : "CONFIRMED";
   const autoAssignedRiderId = input.orderType === "DELIVERY" && !input.asDraft ? await pickLeastBusyRider() : null;
+  // A delivery order with a rider already on it has nothing to sit through
+  // kitchen-style staging for — it goes straight out, so it shows up
+  // actionable on the rider's dashboard immediately instead of getting
+  // stuck at CONFIRMED waiting for someone to click through PREPARING/READY.
+  const status: OrderStatus = input.asDraft ? "DRAFT" : autoAssignedRiderId ? "OUT_FOR_DELIVERY" : "CONFIRMED";
 
   const orderId = await withTransaction(async (session) => {
     const orderNumber = await nextSequence("order_number", session);

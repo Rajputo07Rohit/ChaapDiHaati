@@ -44,6 +44,10 @@ export function Orders() {
     queryKey: ["order", selected?.id],
     queryFn: () => api.get<{ order: SalesOrder }>(`/orders/${selected!.id}`),
     enabled: !!selected,
+    // A rider can complete/deliver this exact order from their own phone
+    // while an admin/staff has it open here watching — poll so that shows
+    // up without needing a manual reload.
+    refetchInterval: 8_000,
   });
 
   const cancelMutation = useMutation({

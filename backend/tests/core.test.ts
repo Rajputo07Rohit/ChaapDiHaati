@@ -6,7 +6,6 @@ import {
   cancelOrder,
   refundOrder,
   getOrderFull,
-  updateOrderStatus,
   assignRider,
   recordPayment,
   markDelivered,
@@ -370,22 +369,15 @@ describe("Delivery + COD payment flow", () => {
     );
   }
 
-  async function dispatchToRider(orderId: string, riderId: string) {
-    await updateOrderStatus(orderId, "PREPARING", ADMIN);
-    await updateOrderStatus(orderId, "READY", ADMIN);
-    await assignRider(orderId, riderId, ADMIN);
-    return updateOrderStatus(orderId, "OUT_FOR_DELIVERY", ADMIN);
-  }
-
   it("TEST 1 — COD: blocks delivery while unpaid, then completes and posts the cash ledger entry on collection", async () => {
     const date = "2020-05-01";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    expect(order.status).toBe("CONFIRMED");
+    // A rider already exists when the order is created, so it auto-dispatches
+    // straight to OUT_FOR_DELIVERY — no kitchen staging, no manual assignment.
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
+    expect(order.assigned_rider_id).toBe(rider);
     expect(order.payment_status).toBe("UNPAID");
-
-    await dispatchToRider(order.id, rider);
-    expect((await getOrderFull(order.id)).status).toBe("OUT_FOR_DELIVERY");
 
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
 
@@ -403,11 +395,14 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-02";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
+    // Earlier tests' riders are still in the DB (no reset between tests), so
+    // auto-dispatch could pick any of them — assign this test's rider
+    // explicitly for a deterministic assertion below.
+    await assignRider(order.id, rider, ADMIN);
 
     const paid = await recordPayment(order.id, [{ paymentMethodId: ONLINE, amountPaise: 50000 }], ADMIN, "ADMIN");
     expect(paid.payment_status).toBe("PAID");
 
-    await dispatchToRider(order.id, rider);
     const { order: delivered } = await markDelivered(order.id, rider, "RIDER");
     expect(delivered.status).toBe("COMPLETED");
   });
@@ -416,11 +411,11 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-03";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date, 50000);
+    await assignRider(order.id, rider, ADMIN);
 
     const afterOnline = await recordPayment(order.id, [{ paymentMethodId: ONLINE, amountPaise: 20000 }], ADMIN, "ADMIN");
     expect(afterOnline.payment_status).toBe("PARTIAL");
 
-    await dispatchToRider(order.id, rider);
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
 
     const afterCash = await recordPayment(order.id, [{ paymentMethodId: CASH, amountPaise: 30000 }], rider, "RIDER");
@@ -435,7 +430,9 @@ describe("Delivery + COD payment flow", () => {
     const riderA = await makeUser("RIDER");
     const riderB = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    await dispatchToRider(order.id, riderA);
+    // Two riders exist, so auto-dispatch could have picked either — assign
+    // riderA explicitly so the "wrong rider" check below is deterministic.
+    await assignRider(order.id, riderA, ADMIN);
 
     await expect(recordPayment(order.id, [{ paymentMethodId: CASH, amountPaise: 50000 }], riderB, "RIDER")).rejects.toThrow(ForbiddenError);
     await expect(markDelivered(order.id, riderB, "RIDER")).rejects.toThrow(ForbiddenError);
@@ -445,7 +442,8 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-05";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    await dispatchToRider(order.id, rider);
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
+    await assignRider(order.id, rider, ADMIN);
 
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
     expect((await getOrderFull(order.id)).status).toBe("OUT_FOR_DELIVERY");

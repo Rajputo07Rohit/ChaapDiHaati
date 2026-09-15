@@ -14,7 +14,11 @@ applyTheme(getStoredTheme());
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 15_000 },
+    // Cross-device flows (rider updates an order on their phone; admin has
+    // it open on the counter screen) rely on refetching to see it — window
+    // focus is the cheap, natural trigger for "I just tabbed back, is this
+    // still current" without needing a dedicated polling interval everywhere.
+    queries: { retry: 1, refetchOnWindowFocus: true, staleTime: 15_000 },
   },
 });
 
