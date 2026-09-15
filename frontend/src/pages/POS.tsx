@@ -194,6 +194,14 @@ export function POS() {
       resetCart();
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // A WhatsApp number was given for this delivery — offer to send the
+      // bill right away instead of making staff go find the order later.
+      // WhatsApp itself still needs one tap to actually open (browsers
+      // won't let a page silently open a chat without a user gesture), but
+      // everything up to that is automatic.
+      if (res.order.customer_phone?.trim()) {
+        setSharingOrder(res.order);
+      }
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Could not create order");
