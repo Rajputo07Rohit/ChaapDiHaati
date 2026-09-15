@@ -1,7 +1,7 @@
 [build]
   base = "frontend"
   command = "npm run build"
-  publish = "frontend/dist"
+  publish = "dist"
 
 # Proxies API calls through Netlify to the Render backend so the browser
 # sees everything as same-origin — no CORS setup needed, and the existing
