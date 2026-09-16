@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Plus, Minus, Trash2, X, Percent, Tag, MessageCircle, CheckCircle2 } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import { DiscountType, MenuCategory, OrderType, PaymentMethod, PriceType, SalesOrder } from "../api/types";
+import { DiscountRule, DiscountType, MenuCategory, OrderType, PaymentMethod, PriceType, SalesOrder } from "../api/types";
 import { formatPaise, rupeesToPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
 import { Badge, Button, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
@@ -12,6 +12,7 @@ import { ShareBillModal } from "../components/ShareBillModal";
 interface CartLine {
   key: string;
   menuItemId: string;
+  categoryId: string;
   name: string;
   categoryName: string;
   priceType: PriceType;
@@ -21,6 +22,7 @@ interface CartLine {
   specialInstructions?: string;
   discountType: DiscountType;
   discountValueInput: string; // FLAT: rupees as typed; PERCENTAGE: raw 0-100 number
+  appliedDiscountRuleId?: string; // which admin-defined discount (if any) set the fields above
 }
 
 const ORDER_TYPES: { value: OrderType; label: string }[] = [
@@ -29,13 +31,6 @@ const ORDER_TYPES: { value: OrderType; label: string }[] = [
   { value: "DELIVERY", label: "Delivery" },
   { value: "ONLINE", label: "Online" },
 ];
-
-/** The categories a running "10% off" promotion applies to — Rolls, Breads,
- * and Extras are deliberately excluded per the owner's pricing policy. Quick
- * Discount only ever touches lines in these categories; every other line in
- * the cart is left exactly as it was. */
-const QUICK_DISCOUNT_CATEGORIES = ["Soya Tandoori (Chaap)", "Paneer Tandoori", "Mushroom Tandoori", "Momo"];
-const QUICK_DISCOUNT_PERCENT = "10";
 
 /** Mirrors the backend's resolveDiscountAmount so the POS preview matches what will actually be charged. */
 function resolveDiscount(basePaise: number, type: DiscountType, valueInput: string): number {
@@ -49,6 +44,8 @@ export function POS() {
   const queryClient = useQueryClient();
   const { data: menuData } = useQuery({ queryKey: ["menu"], queryFn: () => api.get<{ categories: MenuCategory[] }>("/menu") });
   const { data: pmData } = useQuery({ queryKey: ["payment-methods"], queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods") });
+  const { data: discountData } = useQuery({ queryKey: ["discounts"], queryFn: () => api.get<{ discounts: DiscountRule[] }>("/discounts") });
+  const discountRules = discountData?.discounts ?? [];
 
   const categories = (menuData?.categories ?? []).filter((c) => c.name !== "System" && c.items.length > 0);
   const [activeCat, setActiveCat] = useState<string | null>(null);
@@ -82,7 +79,15 @@ export function POS() {
   const netTotal = baseForOrderDiscount - orderDiscountPaise;
   const totalDiscount = itemDiscountTotal + orderDiscountPaise;
 
-  function addToCart(menuItemId: string, name: string, categoryName: string, priceType: PriceType, priceLabel: string, unitPricePaise: number) {
+  function addToCart(
+    menuItemId: string,
+    categoryId: string,
+    name: string,
+    categoryName: string,
+    priceType: PriceType,
+    priceLabel: string,
+    unitPricePaise: number
+  ) {
     setCompletedOrder(null); // tapping an item means a fresh order — drop the previous one's confirmation screen
     setCart((prev) => {
       const key = `${menuItemId}:${priceType}`;
@@ -90,27 +95,37 @@ export function POS() {
       if (existing) return prev.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l));
       return [
         ...prev,
-        { key, menuItemId, name, categoryName, priceType, priceLabel, unitPricePaise, quantity: 1, discountType: "FLAT", discountValueInput: "" },
+        { key, menuItemId, categoryId, name, categoryName, priceType, priceLabel, unitPricePaise, quantity: 1, discountType: "FLAT", discountValueInput: "" },
       ];
     });
   }
 
-  /** One tap applies the running promotion to every eligible line already in
-   * the cart (and nothing else) — no need to open each line's discount editor
-   * one by one when half the order qualifies. */
-  function applyQuickDiscount() {
+  function ruleAppliesTo(rule: DiscountRule, line: CartLine): boolean {
+    return rule.menuItemIds.includes(line.menuItemId) || rule.categoryIds.includes(line.categoryId);
+  }
+
+  /** One tap applies an admin-defined discount to every eligible line already
+   * in the cart (and nothing else). Tapping the same rule again removes it
+   * from every line it had applied to. */
+  function toggleDiscountRule(rule: DiscountRule) {
+    const alreadyApplied = cart.some((l) => l.appliedDiscountRuleId === rule.id);
+    if (alreadyApplied) {
+      setCart((prev) => prev.map((l) => (l.appliedDiscountRuleId === rule.id ? { ...l, discountValueInput: "", appliedDiscountRuleId: undefined } : l)));
+      toast.success(`"${rule.name}" removed`);
+      return;
+    }
     setCart((prev) =>
       prev.map((l) =>
-        QUICK_DISCOUNT_CATEGORIES.includes(l.categoryName)
-          ? { ...l, discountType: "PERCENTAGE" as DiscountType, discountValueInput: QUICK_DISCOUNT_PERCENT }
+        ruleAppliesTo(rule, l)
+          ? { ...l, discountType: rule.discountType, discountValueInput: rule.discountType === "PERCENTAGE" ? String(rule.discountValue) : String(rule.discountValue / 100), appliedDiscountRuleId: rule.id }
           : l
       )
     );
-    const eligibleCount = cart.filter((l) => QUICK_DISCOUNT_CATEGORIES.includes(l.categoryName)).length;
+    const eligibleCount = cart.filter((l) => ruleAppliesTo(rule, l)).length;
     if (eligibleCount === 0) {
-      toast.error("No items from the discount-eligible categories are in the cart.");
+      toast.error(`No items in the cart match "${rule.name}".`);
     } else {
-      toast.success(`${QUICK_DISCOUNT_PERCENT}% off applied to ${eligibleCount} eligible item${eligibleCount > 1 ? "s" : ""}`);
+      toast.success(`"${rule.name}" applied to ${eligibleCount} item${eligibleCount > 1 ? "s" : ""}`);
     }
   }
 
@@ -119,7 +134,10 @@ export function POS() {
   }
 
   function updateLineDiscount(key: string, patch: Partial<Pick<CartLine, "discountType" | "discountValueInput">>) {
-    setCart((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+    // Manually editing a line's discount detaches it from whichever admin
+    // rule (if any) had set it, so the rule's toggle button doesn't keep
+    // claiming this line is still running that exact discount.
+    setCart((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch, appliedDiscountRuleId: undefined } : l)));
   }
 
   function removeLine(key: string) {
@@ -252,7 +270,7 @@ export function POS() {
                   <div className="space-y-1.5">
                     {half && (
                       <button
-                        onClick={() => addToCart(item.id, item.name, currentCategory!.name, "HALF", item.half_label, half.price_paise)}
+                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "HALF", item.half_label, half.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartHalf ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -263,7 +281,7 @@ export function POS() {
                     )}
                     {full && (
                       <button
-                        onClick={() => addToCart(item.id, item.name, currentCategory!.name, "FULL", item.full_label, full.price_paise)}
+                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "FULL", item.full_label, full.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartFull ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -274,7 +292,7 @@ export function POS() {
                     )}
                     {single && (
                       <button
-                        onClick={() => addToCart(item.id, item.name, currentCategory!.name, "SINGLE", "Add", single.price_paise)}
+                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "SINGLE", "Add", single.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartSingle ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -343,7 +361,7 @@ export function POS() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => addToCart(item.id, item.name, extrasCategory.name, price.price_type, "Add", price.price_paise)}
+                  onClick={() => addToCart(item.id, extrasCategory.id, item.name, extrasCategory.name, price.price_type, "Add", price.price_paise)}
                   className="tap-btn text-[11px] font-medium px-2 py-1 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200"
                 >
                   + {item.name} ({formatPaise(price.price_paise)})
@@ -435,15 +453,24 @@ export function POS() {
           ))}
         </div>
         <div className="p-4 border-t border-slate-100 space-y-2">
-          {cart.length > 0 && (
-            <button
-              onClick={applyQuickDiscount}
-              title={`Applies only to: ${QUICK_DISCOUNT_CATEGORIES.join(", ")}`}
-              className="tap-btn w-full flex items-center justify-center gap-1.5 text-xs font-medium rounded-lg py-2 border border-dashed border-brand-300 text-brand-700 bg-brand-50 hover:bg-brand-100"
-            >
-              <Percent size={12} /> Apply {QUICK_DISCOUNT_PERCENT}% Off — Chaap, Momo, Paneer & Mushroom Tandoori
-            </button>
-          )}
+          {cart.length > 0 &&
+            discountRules.map((rule) => {
+              const applied = cart.some((l) => l.appliedDiscountRuleId === rule.id);
+              return (
+                <button
+                  key={rule.id}
+                  onClick={() => toggleDiscountRule(rule)}
+                  className={`tap-btn w-full flex items-center justify-center gap-1.5 text-xs font-medium rounded-lg py-2 border border-dashed ${
+                    applied ? "border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100" : "border-brand-300 text-brand-700 bg-brand-50 hover:bg-brand-100"
+                  }`}
+                >
+                  <Percent size={12} />
+                  {applied
+                    ? `Remove "${rule.name}"`
+                    : `Apply ${rule.discountType === "PERCENTAGE" ? `${rule.discountValue}%` : formatPaise(rule.discountValue)} Off — ${rule.name}`}
+                </button>
+              );
+            })}
           {discountOpen ? (
             <div>
               <div className="flex items-center justify-between">

@@ -15,3 +15,4 @@ export * from "./Staff";
 export * from "./AuditLog";
 export * from "./Counter";
 export * from "./HistoricalItemSale";
+export * from "./Discount";

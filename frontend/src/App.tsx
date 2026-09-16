@@ -16,6 +16,7 @@ import { DailyClosing } from "./pages/DailyClosing";
 import { Reports } from "./pages/Reports";
 import { Staff } from "./pages/Staff";
 import { SettingsPage } from "./pages/Settings";
+import { Discounts } from "./pages/Discounts";
 import { AuditLog } from "./pages/AuditLog";
 import { RiderDashboard } from "./pages/RiderDashboard";
 import { Role } from "./api/types";
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/reports" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Reports /></RequireAuth>} />
         <Route path="/staff" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Staff /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
+        <Route path="/discounts" element={<RequireAuth roles={["ADMIN"]}><Discounts /></RequireAuth>} />
         <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
         <Route path="/" element={<RoleHome />} />
       </Route>

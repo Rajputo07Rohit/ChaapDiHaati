@@ -36,6 +36,17 @@ export interface MenuCategory {
   items: MenuItem[];
 }
 
+export interface DiscountRule {
+  id: string;
+  name: string;
+  menuItemIds: string[];
+  categoryIds: string[];
+  discountType: DiscountType;
+  discountValue: number;
+  active: boolean;
+  createdAt: string;
+}
+
 export type StockStatus = "OUT_OF_STOCK" | "CRITICAL" | "LOW" | "HEALTHY";
 
 export interface InventoryItem {

@@ -17,6 +17,7 @@ import { reportsRouter } from "../modules/reports/reports.routes";
 import { auditRouter } from "../modules/audit/audit.routes";
 import { settingsRouter } from "../modules/settings/settings.routes";
 import { backupRouter } from "../modules/backup/backup.routes";
+import { discountsRouter } from "../modules/discounts/discounts.routes";
 
 export const apiRouter = Router();
 
@@ -38,3 +39,4 @@ apiRouter.use("/reports", reportsRouter);
 apiRouter.use("/audit-logs", auditRouter);
 apiRouter.use("/settings", settingsRouter);
 apiRouter.use("/backup", backupRouter);
+apiRouter.use("/discounts", discountsRouter);

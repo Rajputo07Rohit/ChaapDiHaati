@@ -16,6 +16,7 @@ import {
   Users,
   Settings as SettingsIcon,
   History,
+  Percent,
   Menu as MenuIcon,
   X,
   LogOut,
@@ -49,6 +50,7 @@ const NAV: NavItem[] = [
   { to: "/daily-closing", label: "Daily Closing", icon: CalendarCheck, roles: ["ADMIN", "MANAGER"] },
   { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["ADMIN", "MANAGER"] },
   { to: "/staff", label: "Staff", icon: Users, roles: ["ADMIN", "MANAGER"] },
+  { to: "/discounts", label: "Discounts", icon: Percent, roles: ["ADMIN"] },
   { to: "/settings", label: "Settings", icon: SettingsIcon, roles: ["ADMIN"] },
   { to: "/audit-log", label: "Audit Log", icon: History, roles: ["ADMIN"] },
 ];
