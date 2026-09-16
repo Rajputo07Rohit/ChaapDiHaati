@@ -48,4 +48,6 @@ export interface CompleteOrderInput {
   payments: PaymentInput[];
   allowNegativeStock?: boolean;
   overrideReason?: string;
+  /** Set after staff confirms an INVENTORY_ITEMS_MISSING error — completes the order anyway, skipping the ingredients whose inventory record is missing. */
+  bypassMissingInventory?: boolean;
 }

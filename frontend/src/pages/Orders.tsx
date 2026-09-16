@@ -8,6 +8,7 @@ import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
 import { Button, Card, EmptyState, Input, Modal, OrderStatusBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
+import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import { useAuth } from "../context/AuthContext";
 
 export function Orders() {
@@ -61,19 +62,48 @@ export function Orders() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not cancel order"),
   });
 
+  const [missingInventory, setMissingInventory] = useState<string[] | null>(null);
+  const [deliverMissingInventory, setDeliverMissingInventory] = useState<{ orderId: string; missingItems: string[] } | null>(null);
+
+  const staffDeliverMutation = useMutation({
+    mutationFn: ({ orderId, bypassMissingInventory }: { orderId: string; bypassMissingInventory?: boolean }) =>
+      api.post(`/orders/${orderId}/deliver`, bypassMissingInventory ? { bypassMissingInventory: true } : undefined),
+    onSuccess: () => {
+      toast.success("Order delivered & completed");
+      setDeliverMissingInventory(null);
+      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (err, vars) => {
+      if (err instanceof ApiError && err.code === "INVENTORY_ITEMS_MISSING") {
+        setDeliverMissingInventory({ orderId: vars.orderId, missingItems: (err.details as { missingItems?: string[] } | undefined)?.missingItems ?? [] });
+        return;
+      }
+      toast.error(err instanceof ApiError ? err.message : "Could not mark delivered");
+    },
+  });
+
   const collectPaymentMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (bypassMissingInventory?: boolean) =>
       api.post(`/orders/${payTarget!.id}/complete`, {
         payments: [{ paymentMethodId: payMethodId, amountPaise: payTarget!.net_total_paise }],
+        ...(bypassMissingInventory ? { bypassMissingInventory: true } : {}),
       }),
     onSuccess: () => {
       toast.success("Payment collected — order completed");
       setPayTarget(null);
       setPayMethodId("");
+      setMissingInventory(null);
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not collect payment"),
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === "INVENTORY_ITEMS_MISSING") {
+        setMissingInventory((err.details as { missingItems?: string[] } | undefined)?.missingItems ?? []);
+        return;
+      }
+      toast.error(err instanceof ApiError ? err.message : "Could not collect payment");
+    },
   });
 
   const refundMutation = useMutation({
@@ -292,11 +322,7 @@ export function Orders() {
                     variant="secondary"
                     disabled={remainingPaise(detail.order) > 0}
                     title={remainingPaise(detail.order) > 0 ? "Collect the remaining balance first" : ""}
-                    onClick={() => api.post(`/orders/${detail.order.id}/deliver`).then(() => {
-                      toast.success("Order delivered & completed");
-                      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
-                      queryClient.invalidateQueries({ queryKey: ["orders"] });
-                    }).catch((err) => toast.error(err instanceof ApiError ? err.message : "Could not mark delivered"))}
+                    onClick={() => staffDeliverMutation.mutate({ orderId: detail.order.id })}
                   >
                     Mark Delivered
                   </Button>
@@ -449,12 +475,28 @@ export function Orders() {
           <Button
             className="w-full"
             disabled={!payMethodId || collectPaymentMutation.isPending}
-            onClick={() => collectPaymentMutation.mutate()}
+            onClick={() => collectPaymentMutation.mutate(undefined)}
           >
             {collectPaymentMutation.isPending ? "Collecting…" : "Confirm Payment Received"}
           </Button>
         </div>
       </Modal>
+
+      <InventoryMissingDialog
+        open={!!missingInventory}
+        missingItems={missingInventory ?? []}
+        busy={collectPaymentMutation.isPending}
+        onCancel={() => setMissingInventory(null)}
+        onConfirm={() => collectPaymentMutation.mutate(true)}
+      />
+
+      <InventoryMissingDialog
+        open={!!deliverMissingInventory}
+        missingItems={deliverMissingInventory?.missingItems ?? []}
+        busy={staffDeliverMutation.isPending}
+        onCancel={() => setDeliverMissingInventory(null)}
+        onConfirm={() => deliverMissingInventory && staffDeliverMutation.mutate({ orderId: deliverMissingInventory.orderId, bypassMissingInventory: true })}
+      />
 
       <Modal open={recordPayOpen} onClose={() => setRecordPayOpen(false)} title={`Record Payment — Order #${detail?.order.order_number}`}>
         <div className="space-y-3">

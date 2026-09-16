@@ -6,6 +6,7 @@ import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { useAuth } from "../context/AuthContext";
+import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import logo from "../assets/logo.png";
 
 function copyNumber(phone: string) {
@@ -40,16 +41,28 @@ function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: s
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record payment"),
   });
 
+  const [missingInventory, setMissingInventory] = useState<string[] | null>(null);
+
+  function handleDelivered(res: { stockWarnings?: string[] }) {
+    toast.success("Order delivered");
+    for (const w of res.stockWarnings ?? []) {
+      toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+    }
+    setMissingInventory(null);
+    queryClient.invalidateQueries({ queryKey: ["rider-orders"] });
+  }
+
   const deliverMutation = useMutation({
-    mutationFn: () => api.post<{ stockWarnings?: string[] }>(`/orders/${order.id}/deliver`),
-    onSuccess: (res) => {
-      toast.success("Order delivered");
-      for (const w of res.stockWarnings ?? []) {
-        toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+    mutationFn: (bypassMissingInventory?: boolean) =>
+      api.post<{ stockWarnings?: string[] }>(`/orders/${order.id}/deliver`, bypassMissingInventory ? { bypassMissingInventory: true } : undefined),
+    onSuccess: handleDelivered,
+    onError: (err) => {
+      if (err instanceof ApiError && err.code === "INVENTORY_ITEMS_MISSING") {
+        setMissingInventory((err.details as { missingItems?: string[] } | undefined)?.missingItems ?? []);
+        return;
       }
-      queryClient.invalidateQueries({ queryKey: ["rider-orders"] });
+      toast.error(err instanceof ApiError ? err.message : "Could not mark delivered");
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not mark delivered"),
   });
 
   const itemsSummary = order.items?.map((i) => `${i.item_name_snapshot} ×${i.quantity}`).join(", ") ?? "";
@@ -136,13 +149,21 @@ function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: s
       {!isDelivered && (
         <button
           disabled={remaining > 0 || deliverMutation.isPending}
-          onClick={() => deliverMutation.mutate()}
+          onClick={() => deliverMutation.mutate(undefined)}
           title={remaining > 0 ? "Collect the payment above first" : ""}
           className="w-full bg-brand-600 text-white font-bold text-sm py-3 rounded-lg disabled:opacity-40 [touch-action:manipulation]"
         >
           {deliverMutation.isPending ? "Marking…" : "Mark Delivered"}
         </button>
       )}
+
+      <InventoryMissingDialog
+        open={!!missingInventory}
+        missingItems={missingInventory ?? []}
+        busy={deliverMutation.isPending}
+        onCancel={() => setMissingInventory(null)}
+        onConfirm={() => deliverMutation.mutate(true)}
+      />
     </div>
   );
 }

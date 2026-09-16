@@ -4,7 +4,7 @@ import { newId, nowIso, todayBusinessDate } from "../../utils/ids";
 import { nextSequence } from "../../utils/sequence";
 import { recordAudit } from "../../utils/audit";
 import { withTransaction } from "../../db/mongoose";
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../../utils/errors";
+import { ConflictError, ForbiddenError, InventoryMissingError, NotFoundError, ValidationError } from "../../utils/errors";
 import { assertBusinessDateWritable } from "../../utils/businessDate";
 import { getCurrentPrice, getMenuItemOrThrow } from "../menu/menu.service";
 import { getEffectiveRecipeVersion, getRecipeItems } from "../recipes/recipe.service";
@@ -682,7 +682,7 @@ async function finalizeOrder(
   userId: string,
   role: Role,
   session: ClientSession,
-  opts: { allowNegativeStock?: boolean; overrideReason?: string } = {}
+  opts: { allowNegativeStock?: boolean; overrideReason?: string; bypassMissingInventory?: boolean } = {}
 ): Promise<string[]> {
   const isClosedDay = await assertBusinessDateWritable(doc.businessDate, role);
   const now = nowIso();
@@ -691,6 +691,13 @@ async function finalizeOrder(
   // still ring up the order and restock later instead of turning the
   // customer away.
   const stockWarnings: string[] = [];
+  // A recipe pointing at an inventory item that no longer exists is a data
+  // problem, not an out-of-stock one — collected here instead of thrown
+  // immediately so the whole order is checked in one pass. If any turn up
+  // and the caller hasn't opted in via bypassMissingInventory, the entire
+  // transaction is aborted below and the caller gets the full list back to
+  // show a "create anyway?" confirmation before retrying with the flag set.
+  const missingInventoryLabels: string[] = [];
 
   for (const item of doc.items) {
     if (item.status !== "ACTIVE") continue;
@@ -712,21 +719,31 @@ async function finalizeOrder(
       const recipeItems = await getRecipeItems(recipeVersion.id);
       for (const ri of recipeItems) {
         const qtyNeeded = (ri.quantity_base * (1 + ri.wastage_pct / 100) * item.quantity) / (ri.yield_pct / 100);
-        const result = await recordMovement(
-          {
-            inventoryItemId: ri.inventory_item_id,
-            movementType: "SALE_CONSUMPTION",
-            direction: "OUT",
-            quantityBase: qtyNeeded,
-            referenceType: "ORDER",
-            referenceId: doc._id,
-            businessDate: doc.businessDate,
-            userId,
-            allowNegativeStock: true,
-            reason: opts.overrideReason ?? "Sold out of stock — allowed through, flagged for restock.",
-          },
-          session
-        );
+        let result;
+        try {
+          result = await recordMovement(
+            {
+              inventoryItemId: ri.inventory_item_id,
+              movementType: "SALE_CONSUMPTION",
+              direction: "OUT",
+              quantityBase: qtyNeeded,
+              referenceType: "ORDER",
+              referenceId: doc._id,
+              businessDate: doc.businessDate,
+              userId,
+              allowNegativeStock: true,
+              reason: opts.overrideReason ?? "Sold out of stock — allowed through, flagged for restock.",
+            },
+            session
+          );
+        } catch (err) {
+          if (err instanceof NotFoundError) {
+            const label = `${item.itemNameSnapshot}: an ingredient's inventory record is missing (recipe misconfigured)`;
+            if (!missingInventoryLabels.includes(label)) missingInventoryLabels.push(label);
+            continue;
+          }
+          throw err;
+        }
         cogsTotal += result.totalCostPaise ?? 0;
         if (result.wentNegative) {
           const invItem = await getInventoryItemOrThrow(ri.inventory_item_id, session);
@@ -738,6 +755,24 @@ async function finalizeOrder(
 
     item.cogsPaise = cogsTotal;
     item.recipeVersionId = recipeVersion?.id ?? null;
+  }
+
+  if (missingInventoryLabels.length > 0) {
+    if (!opts.bypassMissingInventory) {
+      throw new InventoryMissingError(missingInventoryLabels);
+    }
+    await recordAudit(
+      {
+        userId,
+        action: "MISSING_INVENTORY_AT_SALE",
+        entityType: "sales_order",
+        entityId: doc._id,
+        newValue: { missingInventoryLabels },
+        reason: "Staff chose to complete the sale anyway — those ingredients were not deducted from stock.",
+      },
+      session
+    );
+    for (const label of missingInventoryLabels) stockWarnings.push(label);
   }
 
   doc.status = "COMPLETED";
@@ -790,7 +825,10 @@ export async function completeOrder(
       await postPayments(doc, newPayments, userId, session);
       doc.paymentStatus = "PAID";
     }
-    stockWarnings = await finalizeOrder(doc, userId, role, session, { overrideReason: input.overrideReason });
+    stockWarnings = await finalizeOrder(doc, userId, role, session, {
+      overrideReason: input.overrideReason,
+      bypassMissingInventory: input.bypassMissingInventory,
+    });
   });
 
   return { order: await getOrderOrThrow(orderId), stockWarnings };
@@ -839,7 +877,12 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus, us
  * out with money still outstanding. Consumes stock/COGS and completes the
  * order in the same step as marking it delivered.
  */
-export async function markDelivered(orderId: string, userId: string, role: Role): Promise<{ order: OrderRow; stockWarnings: string[] }> {
+export async function markDelivered(
+  orderId: string,
+  userId: string,
+  role: Role,
+  opts: { bypassMissingInventory?: boolean } = {}
+): Promise<{ order: OrderRow; stockWarnings: string[] }> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
   if (order.status !== "OUT_FOR_DELIVERY") {
@@ -862,7 +905,7 @@ export async function markDelivered(orderId: string, userId: string, role: Role)
     doc.deliveredAt = now;
     doc.updatedAt = now;
     await recordAudit({ userId, action: "ORDER_DELIVERED", entityType: "sales_order", entityId: orderId, newValue: { deliveredAt: now } }, session);
-    stockWarnings = await finalizeOrder(doc, userId, role, session);
+    stockWarnings = await finalizeOrder(doc, userId, role, session, { bypassMissingInventory: opts.bypassMissingInventory });
   });
 
   return { order: await getOrderOrThrow(orderId), stockWarnings };

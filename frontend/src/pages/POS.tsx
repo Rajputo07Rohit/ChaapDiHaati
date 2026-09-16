@@ -8,6 +8,7 @@ import { formatPaise, rupeesToPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
 import { Badge, Button, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
+import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 
 interface CartLine {
   key: string;
@@ -177,27 +178,55 @@ export function POS() {
     };
   }
 
+  const [inventoryMissingPrompt, setInventoryMissingPrompt] = useState<{
+    orderId: string;
+    missingItems: string[];
+    payments: { paymentMethodId: string; amountPaise: number }[];
+  } | null>(null);
+
+  function handleOrderCompleted(res: { order: SalesOrder; stockWarnings?: string[] }) {
+    toast.success(`Order #${res.order.order_number} completed`);
+    for (const w of res.stockWarnings ?? []) {
+      toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+    }
+    printReceipt(res.order);
+    setCompletedOrder(res.order);
+    resetCart();
+    setPayOpen(false);
+    setInventoryMissingPrompt(null);
+    queryClient.invalidateQueries({ queryKey: ["orders"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    queryClient.invalidateQueries({ queryKey: ["inventory"] });
+  }
+
   const createAndCompleteMutation = useMutation({
     mutationFn: async (vars: { payments: { paymentMethodId: string; amountPaise: number }[] }) => {
       const created = await api.post<{ order: SalesOrder }>("/orders", buildOrderPayload());
-      return api.post<{ order: SalesOrder; stockWarnings?: string[] }>(`/orders/${created.order.id}/complete`, { payments: vars.payments });
-    },
-    onSuccess: (res) => {
-      toast.success(`Order #${res.order.order_number} completed`);
-      for (const w of res.stockWarnings ?? []) {
-        toast(`⚠️ Out of stock: ${w}`, { duration: 6000 });
+      try {
+        return await api.post<{ order: SalesOrder; stockWarnings?: string[] }>(`/orders/${created.order.id}/complete`, { payments: vars.payments });
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "INVENTORY_ITEMS_MISSING") {
+          const missingItems = (err.details as { missingItems?: string[] } | undefined)?.missingItems ?? [];
+          // The order itself was already created above — only the complete
+          // step failed, so the retry (if confirmed) finishes that same
+          // order rather than creating a duplicate.
+          setInventoryMissingPrompt({ orderId: created.order.id, missingItems, payments: vars.payments });
+        }
+        throw err;
       }
-      printReceipt(res.order);
-      setCompletedOrder(res.order);
-      resetCart();
-      setPayOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["orders"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["inventory"] });
     },
+    onSuccess: handleOrderCompleted,
     onError: (err) => {
+      if (err instanceof ApiError && err.code === "INVENTORY_ITEMS_MISSING") return; // the confirm dialog handles this, not a toast
       toast.error(err instanceof ApiError ? err.message : "Could not complete order");
     },
+  });
+
+  const bypassInventoryMutation = useMutation({
+    mutationFn: (p: { orderId: string; payments: { paymentMethodId: string; amountPaise: number }[] }) =>
+      api.post<{ order: SalesOrder; stockWarnings?: string[] }>(`/orders/${p.orderId}/complete`, { payments: p.payments, bypassMissingInventory: true }),
+    onSuccess: handleOrderCompleted,
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not complete order"),
   });
 
   // Delivery orders don't get paid at the counter — COD is collected by the
@@ -613,6 +642,14 @@ export function POS() {
         setDeliveryAddress={setDeliveryAddress}
       />
       <ShareBillModal order={sharingOrder} onClose={() => setSharingOrder(null)} />
+
+      <InventoryMissingDialog
+        open={!!inventoryMissingPrompt}
+        missingItems={inventoryMissingPrompt?.missingItems ?? []}
+        busy={bypassInventoryMutation.isPending}
+        onCancel={() => setInventoryMissingPrompt(null)}
+        onConfirm={() => inventoryMissingPrompt && bypassInventoryMutation.mutate(inventoryMissingPrompt)}
+      />
 
       <Modal open={cancelCartOpen} onClose={() => setCancelCartOpen(false)} title="Cancel this order?">
         <div className="space-y-3">

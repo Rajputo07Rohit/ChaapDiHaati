@@ -17,7 +17,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     if (err.status >= 500) {
       console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}`, err);
     }
-    return res.status(err.status).json({ error: { message: err.publicMessage, code: err.code } });
+    return res.status(err.status).json({ error: { message: err.publicMessage, code: err.code, details: err.details } });
   }
 
   console.error(`[${new Date().toISOString()}] ${req.method} ${req.path}`, err);

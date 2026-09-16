@@ -2,12 +2,14 @@ export class AppError extends Error {
   status: number;
   publicMessage: string;
   code: string;
+  details?: unknown;
 
-  constructor(status: number, publicMessage: string, code = "APP_ERROR", debugMessage?: string) {
+  constructor(status: number, publicMessage: string, code = "APP_ERROR", debugMessage?: string, details?: unknown) {
     super(debugMessage || publicMessage);
     this.status = status;
     this.publicMessage = publicMessage;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -38,5 +40,24 @@ export class UnauthorizedError extends AppError {
 export class ConflictError extends AppError {
   constructor(message: string) {
     super(409, message, "CONFLICT");
+  }
+}
+
+/**
+ * Thrown when completing/delivering a sale hits a recipe that points at an
+ * inventory item which no longer exists (data-integrity problem, not an
+ * out-of-stock situation — those already go through as warnings). Rather
+ * than just failing, this carries the affected line names so the POS can
+ * ask "create the order anyway?" and retry with bypassMissingInventory.
+ */
+export class InventoryMissingError extends AppError {
+  constructor(missingItems: string[]) {
+    super(
+      409,
+      `Some ingredients' inventory records are missing: ${missingItems.join(", ")}. You can still complete this order, but those ingredients won't be deducted from stock.`,
+      "INVENTORY_ITEMS_MISSING",
+      undefined,
+      { missingItems }
+    );
   }
 }

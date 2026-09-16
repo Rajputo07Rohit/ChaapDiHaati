@@ -106,6 +106,7 @@ const completeSchema = z.object({
   payments: z.array(paymentLineSchema).default([]),
   allowNegativeStock: z.boolean().optional(),
   overrideReason: z.string().optional(),
+  bypassMissingInventory: z.boolean().optional(),
 });
 
 ordersRouter.post(
@@ -152,12 +153,17 @@ ordersRouter.patch(
 
 // The rider's (or staff's) final action on a delivery — blocked server-side
 // unless payment_status is already PAID.
+const deliverSchema = z.object({ bypassMissingInventory: z.boolean().optional() }).default({});
+
 ordersRouter.post(
   "/:id/deliver",
   requireAuth,
   isAnyRoleOrRider,
   asyncHandler(async (req, res) => {
-    const { order, stockWarnings } = await ordersService.markDelivered(req.params.id, req.user!.id, req.user!.role);
+    const input = deliverSchema.parse(req.body ?? {});
+    const { order, stockWarnings } = await ordersService.markDelivered(req.params.id, req.user!.id, req.user!.role, {
+      bypassMissingInventory: input.bypassMissingInventory,
+    });
     res.json({ order: await ordersService.getOrderFull(order.id), stockWarnings });
   })
 );
