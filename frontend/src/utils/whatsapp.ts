@@ -74,7 +74,12 @@ export function buildBillMessage(order: SalesOrder, profile: BusinessProfile, cu
   out.push("");
   out.push(`Bill No.: #${order.order_number}`);
   out.push(`Date: ${formatBillDateTime(order.created_at)}`);
-  out.push(`Customer: ${customerNameOverride?.trim() || order.customer_name || "Walk-in Customer"}`);
+  // "Walk-in Customer" only makes sense for someone physically at the
+  // counter (dine-in/takeaway) — a delivery or online order always has a
+  // phone number/address behind it, so fall back to something neutral
+  // instead of implying they walked in.
+  const noNameFallback = order.order_type === "DELIVERY" || order.order_type === "ONLINE" ? "Customer" : "Walk-in Customer";
+  out.push(`Customer: ${customerNameOverride?.trim() || order.customer_name || noNameFallback}`);
   out.push(`Order Type: ${orderTypeLabelFor(order.order_type)}`);
   out.push("");
   out.push(DIVIDER, "🍽️ ORDER DETAILS", DIVIDER);
