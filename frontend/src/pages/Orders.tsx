@@ -10,6 +10,7 @@ import { Button, Card, EmptyState, Input, Modal, OrderStatusBadge, PageHeader, P
 import { ShareBillModal } from "../components/ShareBillModal";
 import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import { useAuth } from "../context/AuthContext";
+import { defaultPaymentMethodId } from "../utils/paymentDefaults";
 
 export function Orders() {
   const { user } = useAuth();
@@ -238,7 +239,7 @@ export function Orders() {
                         onClick={(e) => {
                           e.stopPropagation();
                           setPayTarget(o);
-                          setPayMethodId(pmData?.methods[0]?.id ?? "");
+                          setPayMethodId(defaultPaymentMethodId(o.order_type, pmData?.methods ?? []));
                         }}
                       >
                         Collect Payment
@@ -295,7 +296,7 @@ export function Orders() {
                     size="sm"
                     onClick={() => {
                       setPayTarget(detail.order);
-                      setPayMethodId(pmData?.methods[0]?.id ?? "");
+                      setPayMethodId(defaultPaymentMethodId(detail.order.order_type, pmData?.methods ?? []));
                     }}
                   >
                     Collect Payment

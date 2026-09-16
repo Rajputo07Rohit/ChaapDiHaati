@@ -9,6 +9,7 @@ import { printReceipt } from "../utils/receipt";
 import { Badge, Button, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
 import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
+import { defaultPaymentMethodId } from "../utils/paymentDefaults";
 
 interface CartLine {
   key: string;
@@ -711,7 +712,7 @@ function PaymentModal({
 
   useEffect(() => {
     if (open && methods.length > 0) {
-      setLines([{ paymentMethodId: methods[0].id, amountRupees: (netTotal / 100).toString() }]);
+      setLines([{ paymentMethodId: defaultPaymentMethodId(orderType, methods), amountRupees: (netTotal / 100).toString() }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, methods]);
@@ -777,7 +778,7 @@ function PaymentModal({
         ))}
         <button
           className="text-xs text-brand-600 font-medium"
-          onClick={() => setLines((prev) => [...prev, { paymentMethodId: methods[0]?.id ?? "", amountRupees: "" }])}
+          onClick={() => setLines((prev) => [...prev, { paymentMethodId: defaultPaymentMethodId(orderType, methods), amountRupees: "" }])}
         >
           + Split payment
         </button>
