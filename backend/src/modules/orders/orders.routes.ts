@@ -197,7 +197,7 @@ ordersRouter.get(
   requireAuth,
   isRider,
   asyncHandler(async (req, res) => {
-    const orders = await ordersService.listOrdersForRider(req.user!.id, req.query.all === "1");
+    const orders = await ordersService.listOrdersForRider(req.user!.id, req.query.all === "1", req.query.businessDate as string | undefined);
     res.json({ orders });
   })
 );

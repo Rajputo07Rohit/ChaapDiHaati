@@ -11,12 +11,7 @@ import { ShareBillModal } from "../components/ShareBillModal";
 import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import { useAuth } from "../context/AuthContext";
 import { defaultPaymentMethodId } from "../utils/paymentDefaults";
-
-/** yyyy-mm-dd (business_date / the native date input's value) -> dd/mm/yyyy for display. */
-function toDdMmYyyy(isoDate: string): string {
-  const [y, m, d] = isoDate.split("-");
-  return `${d}/${m}/${y}`;
-}
+import { toDdMmYyyy } from "../utils/date";
 
 export function Orders() {
   const { user } = useAuth();

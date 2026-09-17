@@ -1008,12 +1008,16 @@ export async function refundOrder(
 
 /** A rider's actionable queue by default (assigned, dispatched, not yet
  * delivered); `includeAll` adds their completed/cancelled history too. */
-export async function listOrdersForRider(riderId: string, includeAll = false) {
+export async function listOrdersForRider(riderId: string, includeAll = false, businessDate?: string) {
   // A cancelled/refunded order is never something a rider should still see
   // as theirs — the "show delivered too" view is for completed deliveries,
   // not dead orders that happened to keep their old assignedRiderId.
   const query: Record<string, unknown> = { assignedRiderId: riderId, status: { $nin: ["CANCELLED", "REFUNDED"] } };
-  if (!includeAll) query.status = "OUT_FOR_DELIVERY";
+  // Picking a specific date is inherently a "look back" action — always show
+  // that whole day's orders (delivered or not), regardless of the "show
+  // delivered too" toggle, since a past date's orders are usually done.
+  if (!includeAll && !businessDate) query.status = "OUT_FOR_DELIVERY";
+  if (businessDate) query.businessDate = businessDate;
   const docs = await Order.find(query).sort({ createdAt: -1 });
   return Promise.all(
     docs.map(async (o) => ({ ...toOrderRow(o), items: o.items.map(toItemRow), payments: await toPaymentRows(o.payments) }))

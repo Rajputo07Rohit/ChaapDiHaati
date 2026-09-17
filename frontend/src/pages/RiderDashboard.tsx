@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2 } from "lucide-react";
+import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2, Calendar } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
+import { toDdMmYyyy } from "../utils/date";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo.png";
 
@@ -183,10 +184,17 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
 export function RiderDashboard() {
   const { user, logout } = useAuth();
   const [showAll, setShowAll] = useState(false);
+  const [businessDate, setBusinessDate] = useState("");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["rider-orders", showAll],
-    queryFn: () => api.get<{ orders: SalesOrder[] }>(`/orders/rider/mine${showAll ? "?all=1" : ""}`),
+    queryKey: ["rider-orders", showAll, businessDate],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (showAll) params.set("all", "1");
+      if (businessDate) params.set("businessDate", businessDate);
+      const qs = params.toString();
+      return api.get<{ orders: SalesOrder[] }>(`/orders/rider/mine${qs ? `?${qs}` : ""}`);
+    },
     refetchInterval: 15_000,
   });
 
@@ -198,6 +206,16 @@ export function RiderDashboard() {
   const upiMethodId = pmData?.methods.find((m) => m.name === "UPI")?.id ?? pmData?.methods.find((m) => m.type === "ONLINE")?.id ?? "";
 
   const orders = data?.orders ?? [];
+
+  // Group into date sections so today's and yesterday's deliveries don't
+  // blur together — a rider can otherwise scroll a long list with no idea
+  // which order was from which day, or which of them are already delivered.
+  const ordersByDate: [string, SalesOrder[]][] = [];
+  for (const o of orders) {
+    const group = ordersByDate.find(([d]) => d === o.business_date);
+    if (group) group[1].push(o);
+    else ordersByDate.push([o.business_date, [o]]);
+  }
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -214,10 +232,26 @@ export function RiderDashboard() {
         </button>
       </div>
 
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
         <button onClick={() => setShowAll((v) => !v)} className="text-xs font-semibold text-slate-500 underline underline-offset-2">
           {showAll ? "Show active only" : "Show delivered too"}
         </button>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="date"
+            value={businessDate}
+            onChange={(e) => setBusinessDate(e.target.value)}
+            className="border border-slate-300 rounded-lg px-2 py-1 text-xs"
+          />
+          {businessDate && (
+            <>
+              <span className="text-xs text-slate-500 font-medium tabular-nums">{toDdMmYyyy(businessDate)}</span>
+              <button onClick={() => setBusinessDate("")} className="text-xs text-slate-400 hover:text-slate-600">
+                Clear
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="px-4 pb-8 space-y-3 max-w-lg mx-auto">
@@ -228,8 +262,19 @@ export function RiderDashboard() {
             No deliveries assigned right now.
           </div>
         )}
-        {orders.map((o) => (
-          <OrderCard key={o.id} order={o} cashMethodId={cashMethodId} upiMethodId={upiMethodId} />
+        {ordersByDate.map(([date, dateOrders], idx) => (
+          <Fragment key={date}>
+            <div className={`flex items-center gap-2 bg-brand-600 text-white text-base font-extrabold px-4 py-3 rounded-xl shadow-sm ${idx > 0 ? "mt-5" : ""}`}>
+              <Calendar size={18} />
+              {toDdMmYyyy(date)}
+              <span className="font-semibold text-white/80 text-sm">
+                ({dateOrders.length} order{dateOrders.length > 1 ? "s" : ""})
+              </span>
+            </div>
+            {dateOrders.map((o) => (
+              <OrderCard key={o.id} order={o} cashMethodId={cashMethodId} upiMethodId={upiMethodId} />
+            ))}
+          </Fragment>
         ))}
       </div>
     </div>
