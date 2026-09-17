@@ -31,18 +31,23 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
   // How the customer actually paid the rider on arrival — Cash goes into
   // Cash-in-Hand, UPI (scan-to-pay) goes into Bank Balance, matching how
   // the counter's own payment collection already routes by method type.
-  const [payMode, setPayMode] = useState<"CASH" | "UPI">("CASH");
+  // One tap does it — no separate "confirm" step for something this simple.
+  const [payMode, setPayMode] = useState<"CASH" | "UPI" | null>(null);
 
   const collectMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (mode: "CASH" | "UPI") =>
       api.post(`/orders/${order.id}/payments`, {
-        payments: [{ paymentMethodId: payMode === "CASH" ? cashMethodId : upiMethodId, amountPaise: remaining }],
+        payments: [{ paymentMethodId: mode === "CASH" ? cashMethodId : upiMethodId, amountPaise: remaining }],
       }),
+    onMutate: (mode) => setPayMode(mode),
     onSuccess: () => {
       toast.success(`${formatPaise(remaining)} collected`);
       queryClient.invalidateQueries({ queryKey: ["rider-orders"] });
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record payment"),
+    onError: (err) => {
+      setPayMode(null);
+      toast.error(err instanceof ApiError ? err.message : "Could not record payment");
+    },
   });
 
   function handleDelivered(res: { stockWarnings?: string[] }) {
@@ -140,29 +145,24 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
           </div>
           <div className="flex gap-1.5">
             <button
-              onClick={() => setPayMode("CASH")}
-              className={`flex-1 text-sm font-semibold py-2 rounded-lg [touch-action:manipulation] ${
+              disabled={collectMutation.isPending}
+              onClick={() => collectMutation.mutate("CASH")}
+              className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
                 payMode === "CASH" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
               }`}
             >
-              Cash
+              {payMode === "CASH" && collectMutation.isPending ? "Recording…" : "Cash"}
             </button>
             <button
-              onClick={() => setPayMode("UPI")}
-              className={`flex-1 text-sm font-semibold py-2 rounded-lg [touch-action:manipulation] ${
+              disabled={collectMutation.isPending}
+              onClick={() => collectMutation.mutate("UPI")}
+              className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
                 payMode === "UPI" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
               }`}
             >
-              UPI
+              {payMode === "UPI" && collectMutation.isPending ? "Recording…" : "UPI"}
             </button>
           </div>
-          <button
-            disabled={collectMutation.isPending}
-            onClick={() => collectMutation.mutate()}
-            className="w-full bg-rose-600 text-white font-bold text-sm py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation]"
-          >
-            {collectMutation.isPending ? "Recording…" : `Mark ${payMode === "CASH" ? "Cash" : "UPI"} Collected`}
-          </button>
         </div>
       )}
 
