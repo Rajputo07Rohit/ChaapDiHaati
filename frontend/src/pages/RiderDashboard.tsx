@@ -1,11 +1,12 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2, Calendar } from "lucide-react";
+import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2, Calendar, Sun, Moon } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { toDdMmYyyy } from "../utils/date";
+import { AppTheme, applyTheme, getStoredTheme } from "../utils/theme";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/logo.png";
 
@@ -185,6 +186,8 @@ export function RiderDashboard() {
   const { user, logout } = useAuth();
   const [showAll, setShowAll] = useState(false);
   const [businessDate, setBusinessDate] = useState("");
+  const [theme, setTheme] = useState<AppTheme>(getStoredTheme);
+  useEffect(() => applyTheme(theme), [theme]);
 
   const { data, isLoading } = useQuery({
     queryKey: ["rider-orders", showAll, businessDate],
@@ -227,26 +230,37 @@ export function RiderDashboard() {
             <div className="text-xs text-slate-500">{user?.fullName}</div>
           </div>
         </div>
-        <button onClick={() => logout()} className="text-slate-500 p-2 -mr-2" aria-label="Log out">
-          <LogOut size={20} />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="text-slate-500 p-2" aria-label="Toggle dark/light theme"
+          >
+            {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+          <button onClick={() => logout()} className="text-slate-500 p-2 -mr-2" aria-label="Log out">
+            <LogOut size={20} />
+          </button>
+        </div>
       </div>
 
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
         <button onClick={() => setShowAll((v) => !v)} className="text-xs font-semibold text-slate-500 underline underline-offset-2">
           {showAll ? "Show active only" : "Show delivered too"}
         </button>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <input
             type="date"
             value={businessDate}
             onChange={(e) => setBusinessDate(e.target.value)}
-            className="border border-slate-300 rounded-lg px-2 py-1 text-xs"
+            className="bg-white border border-slate-400 rounded-lg px-2.5 py-1.5 text-sm text-slate-900"
           />
           {businessDate && (
             <>
-              <span className="text-xs text-slate-500 font-medium tabular-nums">{toDdMmYyyy(businessDate)}</span>
-              <button onClick={() => setBusinessDate("")} className="text-xs text-slate-400 hover:text-slate-600">
+              <span className="text-xs text-slate-500 font-semibold tabular-nums">{toDdMmYyyy(businessDate)}</span>
+              <button
+                onClick={() => setBusinessDate("")}
+                className="text-xs font-semibold text-white bg-slate-500 px-2.5 py-1.5 rounded-lg [touch-action:manipulation]"
+              >
                 Clear
               </button>
             </>

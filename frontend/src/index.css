@@ -3,6 +3,12 @@
 @tailwind utilities;
 
 :root {
+  /* Without this, a phone in system dark mode renders native form controls
+     (date picker, its calendar icon, select dropdowns) using dark browser
+     chrome even on our light pages — making them nearly invisible against
+     a white background. Declaring the scheme explicitly keeps them
+     matching whichever theme is actually active. */
+  color-scheme: light;
   --brand-50: #fff7ed;
   --brand-100: #ffedd5;
   --brand-200: #fed7aa;
@@ -41,6 +47,7 @@ html.theme-mono .rounded { border-radius: 4px; }
    white cards + dark text) to its dark equivalents. Every rule below targets
    an actual Tailwind utility class used somewhere in the app (checked via
    grep), so nothing in the UI is left stranded in the wrong theme. */
+html.theme-dark { color-scheme: dark; }
 html.theme-dark body { background-color: #101319; color: #E7E9EE; }
 
 html.theme-dark .bg-white { background-color: #1B1F27; }
