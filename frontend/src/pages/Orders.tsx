@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { MessageCircle, Phone, MapPin, User as UserIcon, Truck } from "lucide-react";
@@ -16,6 +16,7 @@ export function Orders() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState("");
+  const [businessDate, setBusinessDate] = useState("");
   const [selected, setSelected] = useState<SalesOrder | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelTarget, setCancelTarget] = useState<SalesOrder | null>(null);
@@ -37,10 +38,26 @@ export function Orders() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["orders", status],
-    queryFn: () => api.get<{ orders: SalesOrder[] }>(`/orders${status ? `?status=${status}` : "?limit=100"}`),
+    queryKey: ["orders", status, businessDate],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (status) params.set("status", status);
+      if (businessDate) params.set("businessDate", businessDate);
+      if (!status && !businessDate) params.set("limit", "100");
+      return api.get<{ orders: SalesOrder[] }>(`/orders?${params.toString()}`);
+    },
     refetchInterval: 15_000,
   });
+
+  // Group into date sections so a flat 100-order list doesn't blur today's
+  // orders together with yesterday's — this is purely a display grouping,
+  // the underlying list/query is unchanged.
+  const ordersByDate: [string, SalesOrder[]][] = [];
+  for (const o of data?.orders ?? []) {
+    const group = ordersByDate.find(([d]) => d === o.business_date);
+    if (group) group[1].push(o);
+    else ordersByDate.push([o.business_date, [o]]);
+  }
 
   const { data: detail } = useQuery({
     queryKey: ["order", selected?.id],
@@ -183,14 +200,22 @@ export function Orders() {
       <PageHeader
         title="Orders"
         actions={
-          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "REFUNDED"].map((s) => (
-              <option key={s} value={s}>
-                {s.replace(/_/g, " ")}
-              </option>
-            ))}
-          </Select>
+          <div className="flex items-center gap-2">
+            <Input type="date" value={businessDate} onChange={(e) => setBusinessDate(e.target.value)} />
+            {businessDate && (
+              <button onClick={() => setBusinessDate("")} className="text-xs text-slate-400 hover:text-slate-600">
+                Clear date
+              </button>
+            )}
+            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">All statuses</option>
+              {["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "REFUNDED"].map((s) => (
+                <option key={s} value={s}>
+                  {s.replace(/_/g, " ")}
+                </option>
+              ))}
+            </Select>
+          </div>
         }
       />
 
@@ -210,7 +235,14 @@ export function Orders() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {(data?.orders ?? []).map((o) => (
+              {ordersByDate.map(([date, dateOrders]) => (
+                <Fragment key={date}>
+                  <tr key={`hdr-${date}`} className="bg-slate-100">
+                    <td colSpan={8} className="px-4 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      {date} · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+                    </td>
+                  </tr>
+                  {dateOrders.map((o) => (
                 <tr key={o.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => setSelected(o)}>
                   <td className="px-4 py-2.5 font-medium">#{o.order_number}</td>
                   <td className="px-4 py-2.5">
@@ -259,6 +291,8 @@ export function Orders() {
                     )}
                   </td>
                 </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>

@@ -19,7 +19,7 @@ function remainingPaise(order: SalesOrder) {
   return order.net_total_paise - (order.payments ?? []).reduce((s, p) => s + p.amount_paise, 0);
 }
 
-function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: string }) {
+function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; cashMethodId: string; upiMethodId: string }) {
   const queryClient = useQueryClient();
   const phone = order.customer_phone?.trim();
   const address = order.delivery_address?.trim();
@@ -28,10 +28,15 @@ function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: s
   const alreadyPaid = order.net_total_paise - remaining;
   const isDelivered = order.status !== "OUT_FOR_DELIVERY";
 
+  // How the customer actually paid the rider on arrival — Cash goes into
+  // Cash-in-Hand, UPI (scan-to-pay) goes into Bank Balance, matching how
+  // the counter's own payment collection already routes by method type.
+  const [payMode, setPayMode] = useState<"CASH" | "UPI">("CASH");
+
   const collectMutation = useMutation({
     mutationFn: () =>
       api.post(`/orders/${order.id}/payments`, {
-        payments: [{ paymentMethodId: cashMethodId, amountPaise: remaining }],
+        payments: [{ paymentMethodId: payMode === "CASH" ? cashMethodId : upiMethodId, amountPaise: remaining }],
       }),
     onSuccess: () => {
       toast.success(`${formatPaise(remaining)} collected`);
@@ -130,15 +135,33 @@ function OrderCard({ order, cashMethodId }: { order: SalesOrder; cashMethodId: s
         <div className="rounded-xl bg-rose-50 border border-rose-100 p-3 space-y-2">
           {alreadyPaid > 0 && <div className="text-xs text-rose-700">Paid online {formatPaise(alreadyPaid)}</div>}
           <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-rose-700">Cash to collect</span>
+            <span className="text-sm font-semibold text-rose-700">To collect</span>
             <span className="text-2xl font-extrabold text-rose-700 tabular-nums">{formatPaise(remaining)}</span>
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setPayMode("CASH")}
+              className={`flex-1 text-sm font-semibold py-2 rounded-lg [touch-action:manipulation] ${
+                payMode === "CASH" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
+              }`}
+            >
+              Cash
+            </button>
+            <button
+              onClick={() => setPayMode("UPI")}
+              className={`flex-1 text-sm font-semibold py-2 rounded-lg [touch-action:manipulation] ${
+                payMode === "UPI" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
+              }`}
+            >
+              UPI
+            </button>
           </div>
           <button
             disabled={collectMutation.isPending}
             onClick={() => collectMutation.mutate()}
             className="w-full bg-rose-600 text-white font-bold text-sm py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation]"
           >
-            {collectMutation.isPending ? "Recording…" : "Mark Cash Collected"}
+            {collectMutation.isPending ? "Recording…" : `Mark ${payMode === "CASH" ? "Cash" : "UPI"} Collected`}
           </button>
         </div>
       )}
@@ -172,6 +195,7 @@ export function RiderDashboard() {
     queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods"),
   });
   const cashMethodId = pmData?.methods.find((m) => m.type === "CASH")?.id ?? pmData?.methods[0]?.id ?? "";
+  const upiMethodId = pmData?.methods.find((m) => m.name === "UPI")?.id ?? pmData?.methods.find((m) => m.type === "ONLINE")?.id ?? "";
 
   const orders = data?.orders ?? [];
 
@@ -205,7 +229,7 @@ export function RiderDashboard() {
           </div>
         )}
         {orders.map((o) => (
-          <OrderCard key={o.id} order={o} cashMethodId={cashMethodId} />
+          <OrderCard key={o.id} order={o} cashMethodId={cashMethodId} upiMethodId={upiMethodId} />
         ))}
       </div>
     </div>
