@@ -10,6 +10,7 @@ import { useAuth } from "../context/AuthContext";
 
 interface PurchaseLine {
   inventoryItemId: string;
+  itemName: string; // what's typed/shown in the item combobox — may not match any existing item yet
   quantity: string;
   purchaseUnit: string;
   ratePaise: string;
@@ -51,51 +52,78 @@ export function Purchases() {
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [paymentStatus, setPaymentStatus] = useState<"PAID" | "CREDIT" | "PARTIAL">("PAID");
   const [paymentMethodId, setPaymentMethodId] = useState("");
-  const [lines, setLines] = useState<PurchaseLine[]>([{ inventoryItemId: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }]);
+  const [lines, setLines] = useState<PurchaseLine[]>([{ inventoryItemId: "", itemName: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }]);
 
   function resetForm() {
     setSupplierId("");
     setInvoiceNumber("");
     setPaymentStatus("PAID");
-    setLines([{ inventoryItemId: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }]);
+    setLines([{ inventoryItemId: "", itemName: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }]);
   }
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      api.post("/purchases", {
+    mutationFn: async () => {
+      const usableLines = lines.filter((l) => (l.inventoryItemId || l.itemName.trim()) && l.quantity);
+
+      // A typed name that doesn't match any existing item means "create it"
+      // — lets whoever's recording the purchase add a never-bought-before
+      // ingredient on the spot instead of needing an admin to pre-create it
+      // on the Inventory screen first.
+      const resolvedLines = await Promise.all(
+        usableLines.map(async (l) => {
+          if (l.inventoryItemId) return l;
+          const created = await api.post<{ item: InventoryItem }>("/inventory", {
+            name: l.itemName.trim(),
+            category: "RAW_MATERIAL",
+            baseUnit: "piece",
+            purchaseUnit: l.purchaseUnit || "unit",
+            purchaseToBaseFactor: 1,
+            openingQtyBase: 0,
+            pricePending: true,
+          });
+          return { ...l, inventoryItemId: created.item.id };
+        })
+      );
+
+      return api.post("/purchases", {
         supplierId: supplierId || undefined,
         invoiceNumber: invoiceNumber || undefined,
         paymentStatus,
         paymentMethodId: paymentStatus !== "CREDIT" ? paymentMethodId : undefined,
-        items: lines
-          .filter((l) => l.inventoryItemId && l.quantity)
-          .map((l) => ({
-            inventoryItemId: l.inventoryItemId,
-            quantity: parseFloat(l.quantity),
-            purchaseUnit: l.purchaseUnit,
-            ratePaise: l.pricePending ? null : rupeesToPaise(parseFloat(l.ratePaise) || 0),
-            pricePending: l.pricePending,
-          })),
-      }),
+        items: resolvedLines.map((l) => ({
+          inventoryItemId: l.inventoryItemId,
+          quantity: parseFloat(l.quantity),
+          purchaseUnit: l.purchaseUnit,
+          ratePaise: l.pricePending ? null : rupeesToPaise(parseFloat(l.ratePaise) || 0),
+          pricePending: l.pricePending,
+        })),
+      });
+    },
     onSuccess: () => {
       toast.success("Purchase recorded");
       resetForm();
       setModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ["purchases"] });
       queryClient.invalidateQueries({ queryKey: ["inventory"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-all"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record purchase"),
   });
 
-  const items = invData?.items ?? [];
+  // "Recipe Cost Bucket ₹X" items are a COGS bookkeeping trick, not real
+  // purchasable stock — never offer them here.
+  const items = (invData?.items ?? []).filter((i) => !i.name.startsWith("Recipe Cost Bucket"));
 
   function updateLine(idx: number, patch: Partial<PurchaseLine>) {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   }
 
-  function onSelectItem(idx: number, itemId: string) {
-    const item = items.find((i) => i.id === itemId);
-    updateLine(idx, { inventoryItemId: itemId, purchaseUnit: item?.purchase_unit ?? "" });
+  /** Combobox behavior: typing a name that exactly matches an existing item
+   * resolves to that item's id (and copies its purchase unit); anything
+   * else is left as free text, to be created as a new item on submit. */
+  function onItemNameChange(idx: number, name: string) {
+    const match = items.find((i) => i.name.toLowerCase() === name.trim().toLowerCase());
+    updateLine(idx, { itemName: name, inventoryItemId: match?.id ?? "", purchaseUnit: match ? match.purchase_unit : lines[idx].purchaseUnit });
   }
 
   return (
@@ -234,16 +262,21 @@ export function Purchases() {
           </div>
 
           <div className="border-t border-slate-100 pt-3 space-y-2">
+            <datalist id="purchase-inventory-items">
+              {items.map((i) => (
+                <option key={i.id} value={i.name} />
+              ))}
+            </datalist>
             {lines.map((line, idx) => (
               <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                <Select className="col-span-4" value={line.inventoryItemId} onChange={(e) => onSelectItem(idx, e.target.value)}>
-                  <option value="">Select item</option>
-                  {items.map((i) => (
-                    <option key={i.id} value={i.id}>
-                      {i.name}
-                    </option>
-                  ))}
-                </Select>
+                <Input
+                  className="col-span-4"
+                  placeholder="Select or type an item"
+                  list="purchase-inventory-items"
+                  value={line.itemName}
+                  onChange={(e) => onItemNameChange(idx, e.target.value)}
+                  title={!line.inventoryItemId && line.itemName.trim() ? `"${line.itemName}" will be created as a new inventory item` : undefined}
+                />
                 <Input className="col-span-2" placeholder="Qty" type="number" value={line.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value })} />
                 <Input className="col-span-2" placeholder="Unit" value={line.purchaseUnit} onChange={(e) => updateLine(idx, { purchaseUnit: e.target.value })} />
                 <Input
@@ -261,11 +294,14 @@ export function Purchases() {
                 <button className="col-span-1 text-slate-300 hover:text-rose-500" onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}>
                   <Trash2 size={16} />
                 </button>
+                {!line.inventoryItemId && line.itemName.trim() && (
+                  <div className="col-span-12 text-xs text-amber-600 -mt-1">"{line.itemName.trim()}" is a new item — it'll be added to Inventory.</div>
+                )}
               </div>
             ))}
             <button
               className="text-xs text-brand-600 font-medium flex items-center gap-1"
-              onClick={() => setLines((prev) => [...prev, { inventoryItemId: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }])}
+              onClick={() => setLines((prev) => [...prev, { inventoryItemId: "", itemName: "", quantity: "", purchaseUnit: "", ratePaise: "", pricePending: false }])}
             >
               <Plus size={14} /> Add line
             </button>
