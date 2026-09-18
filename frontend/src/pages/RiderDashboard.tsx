@@ -35,15 +35,22 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
   // the counter's own payment collection already routes by method type.
   // One tap does it — no separate "confirm" step for something this simple.
   const [payMode, setPayMode] = useState<"CASH" | "UPI" | null>(null);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitCash, setSplitCash] = useState("");
+  const [splitUpi, setSplitUpi] = useState("");
+
+  function collectPayments(payments: { paymentMethodId: string; amountPaise: number }[]) {
+    collectMutation.mutate(payments);
+  }
 
   const collectMutation = useMutation({
-    mutationFn: (mode: "CASH" | "UPI") =>
-      api.post(`/orders/${order.id}/payments`, {
-        payments: [{ paymentMethodId: mode === "CASH" ? cashMethodId : upiMethodId, amountPaise: remaining }],
-      }),
-    onMutate: (mode) => setPayMode(mode),
-    onSuccess: () => {
-      toast.success(`${formatPaise(remaining)} collected`);
+    mutationFn: (payments: { paymentMethodId: string; amountPaise: number }[]) => api.post(`/orders/${order.id}/payments`, { payments }),
+    onSuccess: (_res, payments) => {
+      const collected = payments.reduce((s, p) => s + p.amountPaise, 0);
+      toast.success(`${formatPaise(collected)} collected`);
+      setSplitOpen(false);
+      setSplitCash("");
+      setSplitUpi("");
       queryClient.invalidateQueries({ queryKey: ["rider-orders"] });
     },
     onError: (err) => {
@@ -51,6 +58,24 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
       toast.error(err instanceof ApiError ? err.message : "Could not record payment");
     },
   });
+
+  function collectFull(mode: "CASH" | "UPI") {
+    setPayMode(mode);
+    collectPayments([{ paymentMethodId: mode === "CASH" ? cashMethodId : upiMethodId, amountPaise: remaining }]);
+  }
+
+  function collectSplit() {
+    const cashPaise = Math.round((parseFloat(splitCash) || 0) * 100);
+    const upiPaise = Math.round((parseFloat(splitUpi) || 0) * 100);
+    const payments: { paymentMethodId: string; amountPaise: number }[] = [];
+    if (cashPaise > 0) payments.push({ paymentMethodId: cashMethodId, amountPaise: cashPaise });
+    if (upiPaise > 0) payments.push({ paymentMethodId: upiMethodId, amountPaise: upiPaise });
+    if (payments.length === 0) {
+      toast.error("Enter at least one amount");
+      return;
+    }
+    collectPayments(payments);
+  }
 
   function handleDelivered(res: { stockWarnings?: string[] }) {
     toast.success("Order delivered");
@@ -145,26 +170,73 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
             <span className="text-sm font-semibold text-rose-700">To collect</span>
             <span className="text-2xl font-extrabold text-rose-700 tabular-nums">{formatPaise(remaining)}</span>
           </div>
-          <div className="flex gap-1.5">
-            <button
-              disabled={collectMutation.isPending}
-              onClick={() => collectMutation.mutate("CASH")}
-              className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
-                payMode === "CASH" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
-              }`}
-            >
-              {payMode === "CASH" && collectMutation.isPending ? "Recording…" : "Cash"}
-            </button>
-            <button
-              disabled={collectMutation.isPending}
-              onClick={() => collectMutation.mutate("UPI")}
-              className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
-                payMode === "UPI" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
-              }`}
-            >
-              {payMode === "UPI" && collectMutation.isPending ? "Recording…" : "UPI"}
-            </button>
-          </div>
+          {!splitOpen ? (
+            <>
+              <div className="flex gap-1.5">
+                <button
+                  disabled={collectMutation.isPending}
+                  onClick={() => collectFull("CASH")}
+                  className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
+                    payMode === "CASH" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
+                  }`}
+                >
+                  {payMode === "CASH" && collectMutation.isPending ? "Recording…" : "Cash"}
+                </button>
+                <button
+                  disabled={collectMutation.isPending}
+                  onClick={() => collectFull("UPI")}
+                  className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
+                    payMode === "UPI" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
+                  }`}
+                >
+                  {payMode === "UPI" && collectMutation.isPending ? "Recording…" : "UPI"}
+                </button>
+              </div>
+              <button onClick={() => setSplitOpen(true)} className="text-xs font-semibold text-rose-600 underline underline-offset-2 [touch-action:manipulation]">
+                Customer paid part cash, part UPI?
+              </button>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-1.5">
+                <div className="flex-1">
+                  <label className="text-[11px] font-semibold text-rose-700">Cash ₹</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={splitCash}
+                    onChange={(e) => setSplitCash(e.target.value)}
+                    className="w-full border border-rose-200 rounded-lg px-2 py-1.5 text-sm"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-[11px] font-semibold text-rose-700">UPI ₹</label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    value={splitUpi}
+                    onChange={(e) => setSplitUpi(e.target.value)}
+                    className="w-full border border-rose-200 rounded-lg px-2 py-1.5 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setSplitOpen(false)}
+                  className="flex-1 text-sm font-semibold py-2 rounded-lg bg-white text-rose-700 border border-rose-200 [touch-action:manipulation]"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={collectMutation.isPending}
+                  onClick={collectSplit}
+                  className="flex-1 text-sm font-bold py-2 rounded-lg bg-rose-600 text-white disabled:opacity-50 [touch-action:manipulation]"
+                >
+                  {collectMutation.isPending ? "Recording…" : "Collect"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
