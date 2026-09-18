@@ -149,14 +149,37 @@ export async function getOrderFull(id: string) {
   return { ...toOrderRow(doc), items: doc.items.map(toItemRow), payments: await toPaymentRows(doc.payments) };
 }
 
-export async function listOrders(filters: { status?: string; businessDate?: string; limit?: number } = {}): Promise<OrderRow[]> {
+export async function listOrders(
+  filters: { status?: string; businessDate?: string; limit?: number } = {}
+): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>> })[]> {
   const query: Record<string, unknown> = {};
   if (filters.status) query.status = filters.status;
   if (filters.businessDate) query.businessDate = filters.businessDate;
   let q = Order.find(query).sort({ createdAt: -1 });
   if (filters.limit) q = q.limit(filters.limit);
   const docs = await q;
-  return docs.map(toOrderRow);
+
+  // One batched PaymentMethod lookup for the whole list, instead of one
+  // per order — matters once this is returning up to 100 rows at a time.
+  const allMethodIds = [...new Set(docs.flatMap((d) => d.payments.filter((p) => p.status === "ACTIVE").map((p) => p.paymentMethodId)))];
+  const methods = await PaymentMethod.find({ _id: { $in: allMethodIds } });
+  const methodById = new Map(methods.map((m) => [m._id, m]));
+
+  return docs.map((doc) => ({
+    ...toOrderRow(doc),
+    payments: doc.payments
+      .filter((p) => p.status === "ACTIVE")
+      .map((p) => {
+        const method = methodById.get(p.paymentMethodId);
+        return {
+          id: p._id,
+          payment_method_id: p.paymentMethodId,
+          payment_method_name: method?.name ?? "",
+          payment_method_type: (method?.type ?? "CASH") as "CASH" | "ONLINE",
+          amount_paise: p.amountPaise,
+        };
+      }),
+  }));
 }
 
 interface ResolvedOrderItem {

@@ -13,11 +13,24 @@ import { useAuth } from "../context/AuthContext";
 import { defaultPaymentMethodId } from "../utils/paymentDefaults";
 import { toDdMmYyyy } from "../utils/date";
 
+/** A short label for what actually paid for the order — the payment
+ * method(s)' names if all the same type, "Mixed" if it spans both Cash and
+ * Online methods, or "Unpaid" if nothing's been collected yet. */
+function paymentModeLabel(order: SalesOrder): string {
+  const payments = order.payments ?? [];
+  if (payments.length === 0) return "Unpaid";
+  const types = new Set(payments.map((p) => p.payment_method_type));
+  if (types.size > 1) return "Mixed";
+  const names = [...new Set(payments.map((p) => p.payment_method_name))];
+  return names.join(" + ");
+}
+
 export function Orders() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState("");
   const [businessDate, setBusinessDate] = useState("");
+  const [paymentMode, setPaymentMode] = useState<"" | "CASH" | "ONLINE">("");
   const [selected, setSelected] = useState<SalesOrder | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelTarget, setCancelTarget] = useState<SalesOrder | null>(null);
@@ -50,11 +63,15 @@ export function Orders() {
     refetchInterval: 15_000,
   });
 
+  const filteredOrders = (data?.orders ?? []).filter(
+    (o) => !paymentMode || (o.payments ?? []).some((p) => p.payment_method_type === paymentMode)
+  );
+
   // Group into date sections so a flat 100-order list doesn't blur today's
   // orders together with yesterday's — this is purely a display grouping,
   // the underlying list/query is unchanged.
   const ordersByDate: [string, SalesOrder[]][] = [];
-  for (const o of data?.orders ?? []) {
+  for (const o of filteredOrders) {
     const group = ordersByDate.find(([d]) => d === o.business_date);
     if (group) group[1].push(o);
     else ordersByDate.push([o.business_date, [o]]);
@@ -219,6 +236,11 @@ export function Orders() {
                 </option>
               ))}
             </Select>
+            <Select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as "" | "CASH" | "ONLINE")}>
+              <option value="">All payment modes</option>
+              <option value="CASH">Cash</option>
+              <option value="ONLINE">Online</option>
+            </Select>
           </div>
         }
       />
@@ -234,6 +256,7 @@ export function Orders() {
                 <th className="text-left px-4 py-2.5">Type</th>
                 <th className="text-left px-4 py-2.5">Status</th>
                 <th className="text-left px-4 py-2.5">Payment</th>
+                <th className="text-left px-4 py-2.5">Mode</th>
                 <th className="text-right px-4 py-2.5">Total</th>
                 <th className="text-right px-4 py-2.5">Actions</th>
               </tr>
@@ -242,12 +265,19 @@ export function Orders() {
               {ordersByDate.map(([date, dateOrders]) => (
                 <Fragment key={date}>
                   <tr key={`hdr-${date}`}>
-                    <td colSpan={8} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
-                      <div className="flex items-center gap-2">
-                        <Calendar size={14} />
-                        {toDdMmYyyy(date)}
-                        <span className="font-normal text-slate-300">
-                          · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+                    <td colSpan={9} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Calendar size={14} />
+                          {toDdMmYyyy(date)}
+                          <span className="font-normal text-slate-300">
+                            · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <span className="tabular-nums">
+                          {formatPaise(
+                            dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0)
+                          )}
                         </span>
                       </div>
                     </td>
@@ -273,6 +303,7 @@ export function Orders() {
                   <td className="px-4 py-2.5">
                     <PaymentStatusBadge status={o.payment_status} />
                   </td>
+                  <td className="px-4 py-2.5 text-slate-500">{paymentModeLabel(o)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatPaise(o.net_total_paise)}</td>
                   <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
                     {canManage && o.order_type !== "DELIVERY" && ["CONFIRMED", "PREPARING", "READY"].includes(o.status) && (
@@ -306,7 +337,7 @@ export function Orders() {
               ))}
             </tbody>
           </table>
-          {!isLoading && (data?.orders.length ?? 0) === 0 && <EmptyState title="No orders found" description="Try a different filter." />}
+          {!isLoading && filteredOrders.length === 0 && <EmptyState title="No orders found" description="Try a different filter." />}
         </div>
       </Card>
 
