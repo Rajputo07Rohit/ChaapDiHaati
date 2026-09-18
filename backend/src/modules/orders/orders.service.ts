@@ -567,6 +567,10 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
     doc.cancelReason = reason;
     doc.cancelledAt = now;
     doc.updatedAt = now;
+    // Every payment on the order was just voided and refunded above — the
+    // order can't still show as PAID/PARTIAL after that, or the Orders
+    // list shows the confusing "CANCELLED" + "PAID" combination.
+    doc.paymentStatus = activePayments.length > 0 ? "REFUNDED" : "UNPAID";
     await doc.save({ session });
 
     await recordAudit(
