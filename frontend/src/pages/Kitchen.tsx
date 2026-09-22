@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ChefHat, Clock, CheckCircle2, Calendar, MapPin } from "lucide-react";
@@ -134,9 +134,15 @@ export function Kitchen() {
   const [businessDate, setBusinessDate] = useState(todayIso());
   const [showReady, setShowReady] = useState(false);
 
+  // The default (pending-only) view deliberately does NOT restrict to one
+  // business date — a PENDING order from an earlier day that never got
+  // marked ready must never silently disappear just because "today" moved
+  // on. The date picker only applies once "Show ready too" is on, for
+  // reviewing one specific day's full history.
   const { data, isLoading } = useQuery({
-    queryKey: ["kitchen-orders", businessDate],
-    queryFn: () => api.get<{ orders: SalesOrder[] }>(`/orders?businessDate=${businessDate}&limit=200`),
+    queryKey: ["kitchen-orders", showReady, businessDate],
+    queryFn: () =>
+      api.get<{ orders: SalesOrder[] }>(showReady ? `/orders?businessDate=${businessDate}&limit=300` : `/orders?limit=300`),
     refetchInterval: 10_000,
   });
 
@@ -144,10 +150,20 @@ export function Kitchen() {
   // counter sale is typically already COMPLETED by the time it reaches
   // here, so this can't filter on order status at all, only on whether
   // the kitchen itself has marked it ready yet.
-  const orders = (data?.orders ?? [])
+  const filtered = (data?.orders ?? [])
     .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED")
     .filter((o) => showReady || o.kitchen_status === "PENDING")
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  // Grouped by date (most recent date first) so a stale pending order from
+  // yesterday reads as clearly separate from today's queue, not blended
+  // into the same undivided list.
+  const ordersByDate: [string, SalesOrder[]][] = [];
+  for (const o of filtered) {
+    const group = ordersByDate.find(([d]) => d === o.business_date);
+    if (group) group[1].push(o);
+    else ordersByDate.push([o.business_date, [o]]);
+  }
 
   const isToday = businessDate === todayIso();
 
@@ -164,38 +180,49 @@ export function Kitchen() {
             >
               {showReady ? "Show pending only" : "Show ready too"}
             </button>
-            <div className="flex items-center gap-1.5">
-              <Calendar size={14} className="text-slate-400" />
-              <input
-                type="date"
-                value={businessDate}
-                onChange={(e) => setBusinessDate(e.target.value || todayIso())}
-                className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm text-slate-900"
-              />
-              <span className="text-xs text-slate-500 font-medium tabular-nums">{toDdMmYyyy(businessDate)}</span>
-              {!isToday && (
-                <button onClick={() => setBusinessDate(todayIso())} className="text-xs font-semibold text-brand-600 underline underline-offset-2">
-                  Today
-                </button>
-              )}
-            </div>
+            {showReady && (
+              <div className="flex items-center gap-1.5">
+                <Calendar size={14} className="text-slate-400" />
+                <input
+                  type="date"
+                  value={businessDate}
+                  onChange={(e) => setBusinessDate(e.target.value || todayIso())}
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm text-slate-900"
+                />
+                <span className="text-xs text-slate-500 font-medium tabular-nums">{toDdMmYyyy(businessDate)}</span>
+                {!isToday && (
+                  <button onClick={() => setBusinessDate(todayIso())} className="text-xs font-semibold text-brand-600 underline underline-offset-2">
+                    Today
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         }
       />
       {isLoading && <div className="text-center text-slate-400 py-16">Loading…</div>}
-      {!isLoading && orders.length === 0 && (
+      {!isLoading && ordersByDate.length === 0 && (
         <div className="text-center text-slate-400 py-24">
           <ChefHat size={48} className="mx-auto mb-3 opacity-40" />
           <div className="text-lg font-medium">{showReady ? "No orders that day." : "All caught up — no orders waiting."}</div>
         </div>
       )}
-      {orders.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {orders.map((o) => (
-            <OrderTicket key={o.id} order={o} />
-          ))}
-        </div>
-      )}
+      {ordersByDate.map(([date, dateOrders]) => (
+        <Fragment key={date}>
+          <div className="flex items-center gap-2 bg-slate-800 text-white text-sm font-bold px-4 py-2 rounded-xl mt-6 first:mt-0">
+            <Calendar size={14} />
+            {toDdMmYyyy(date)}
+            <span className="font-normal text-slate-300">
+              · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-3">
+            {dateOrders.map((o) => (
+              <OrderTicket key={o.id} order={o} />
+            ))}
+          </div>
+        </Fragment>
+      ))}
     </div>
   );
 }
