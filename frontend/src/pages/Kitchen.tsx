@@ -147,7 +147,7 @@ export function Kitchen() {
   const orders = (data?.orders ?? [])
     .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED")
     .filter((o) => showReady || o.kitchen_status === "PENDING")
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   const isToday = businessDate === todayIso();
 
