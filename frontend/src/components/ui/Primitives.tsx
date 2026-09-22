@@ -169,6 +169,10 @@ export function PaymentStatusBadge({ status }: { status: string }) {
   return <Badge tone={map[status] ?? "default"}>{status}</Badge>;
 }
 
+export function KitchenStatusBadge({ status }: { status: "PENDING" | "READY" }) {
+  return <Badge tone={status === "READY" ? "green" : "yellow"}>{status === "READY" ? "Ready" : "Preparing"}</Badge>;
+}
+
 export interface ActionMenuItem {
   label: string;
   onClick: () => void;

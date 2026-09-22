@@ -35,8 +35,9 @@ ordersRouter.get(
   requireAuth,
   isAnyRole,
   asyncHandler(async (req, res) => {
+    const statusParam = req.query.status as string | undefined;
     const orders = await ordersService.listOrders({
-      status: req.query.status as string | undefined,
+      status: statusParam?.includes(",") ? statusParam.split(",") : statusParam,
       businessDate: req.query.businessDate as string | undefined,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
     });
@@ -147,6 +148,18 @@ ordersRouter.patch(
   asyncHandler(async (req, res) => {
     const input = statusSchema.parse(req.body);
     const order = await ordersService.updateOrderStatus(req.params.id, input.status, req.user!.id);
+    res.json({ order: await ordersService.getOrderFull(order.id) });
+  })
+);
+
+// The kitchen's one action — flips kitchenStatus, independent of the
+// order's own status/payment lifecycle (see markKitchenReady).
+ordersRouter.post(
+  "/:id/kitchen-ready",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const order = await ordersService.markKitchenReady(req.params.id, req.user!.id);
     res.json({ order: await ordersService.getOrderFull(order.id) });
   })
 );

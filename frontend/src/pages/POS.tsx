@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Plus, Minus, Trash2, X, Percent, Tag, MessageCircle, CheckCircle2 } from "lucide-react";
@@ -42,7 +43,17 @@ function resolveDiscount(basePaise: number, type: DiscountType, valueInput: stri
   return Math.min(Math.max(amount, 0), basePaise);
 }
 
+interface PosNavState {
+  prefillOrderType?: OrderType;
+  prefillCustomerName?: string;
+  prefillCustomerPhone?: string;
+  prefillDeliveryAddress?: string;
+  continuedFromOrderNumber?: number;
+}
+
 export function POS() {
+  const location = useLocation();
+  const prefill = location.state as PosNavState | null;
   const queryClient = useQueryClient();
   const { data: menuData } = useQuery({ queryKey: ["menu"], queryFn: () => api.get<{ categories: MenuCategory[] }>("/menu") });
   const { data: pmData } = useQuery({ queryKey: ["payment-methods"], queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods") });
@@ -54,7 +65,7 @@ export function POS() {
   const catToShow = activeCat ?? categories[0]?.id ?? null;
 
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [orderType, setOrderType] = useState<OrderType>("DINE_IN");
+  const [orderType, setOrderType] = useState<OrderType>(prefill?.prefillOrderType ?? "DINE_IN");
   const [orderDiscountType, setOrderDiscountType] = useState<DiscountType>("FLAT");
   const [orderDiscountInput, setOrderDiscountInput] = useState("");
   const [discountReason, setDiscountReason] = useState("");
@@ -62,9 +73,21 @@ export function POS() {
   const [payOpen, setPayOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   const [discountLineOpen, setDiscountLineOpen] = useState<string | null>(null);
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [customerName, setCustomerName] = useState(prefill?.prefillCustomerName ?? "");
+  const [customerPhone, setCustomerPhone] = useState(prefill?.prefillCustomerPhone ?? "");
+  const [deliveryAddress, setDeliveryAddress] = useState(prefill?.prefillDeliveryAddress ?? "");
+
+  // Order #1234 was already COMPLETED (paid, stock deducted, COGS locked)
+  // by the time the customer asked for more — reopening it would corrupt
+  // that closed financial record, so "Add More Items" always starts a
+  // brand-new order instead, just pre-filled with the same customer/table
+  // details for convenience. One toast on arrival makes that clear.
+  useEffect(() => {
+    if (prefill?.continuedFromOrderNumber) {
+      toast(`New order for the same customer as #${prefill.continuedFromOrderNumber} — this is a separate order.`, { duration: 5000, icon: "🧾" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [completedOrder, setCompletedOrder] = useState<SalesOrder | null>(null);
   const [sharingOrder, setSharingOrder] = useState<SalesOrder | null>(null);
   const [cancelCartOpen, setCancelCartOpen] = useState(false);

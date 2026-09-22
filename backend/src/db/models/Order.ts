@@ -14,6 +14,16 @@ export type OrderStatus =
   | "REFUNDED";
 export type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "REFUNDED";
 export type DiscountType = "FLAT" | "PERCENTAGE";
+/**
+ * Whether the kitchen has finished preparing this order — deliberately
+ * independent of `status`/`paymentStatus`. Counter sales complete (paid,
+ * stock deducted) the instant they're rung up, well before the food is
+ * actually cooked, so kitchen prep can't be tracked by the main order
+ * lifecycle; this is a separate, purely informational flag every order
+ * gets regardless of type, so the kitchen/orders screens can show "still
+ * cooking" vs "ready" without touching payment or completion at all.
+ */
+export type KitchenStatus = "PENDING" | "READY";
 
 export interface OrderItemSub {
   _id: string;
@@ -63,6 +73,7 @@ export interface OrderDoc {
   orderType: OrderType;
   status: OrderStatus;
   paymentStatus: PaymentStatus;
+  kitchenStatus: KitchenStatus;
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
@@ -142,6 +153,7 @@ const orderSchema = new Schema<OrderDoc>({
     default: "DRAFT",
   },
   paymentStatus: { type: String, required: true, enum: ["UNPAID", "PARTIAL", "PAID", "REFUNDED"], default: "UNPAID" },
+  kitchenStatus: { type: String, required: true, enum: ["PENDING", "READY"], default: "PENDING" },
   customerName: { type: String, default: null },
   customerPhone: { type: String, default: null },
   deliveryAddress: { type: String, default: null },

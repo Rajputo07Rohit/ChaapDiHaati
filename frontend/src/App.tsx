@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { POS } from "./pages/POS";
+import { Kitchen } from "./pages/Kitchen";
 import { Orders } from "./pages/Orders";
 import { Menu } from "./pages/Menu";
 import { Inventory } from "./pages/Inventory";
@@ -49,6 +50,7 @@ export default function App() {
       >
         <Route path="/dashboard" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Dashboard /></RequireAuth>} />
         <Route path="/pos" element={<POS />} />
+        <Route path="/kitchen" element={<Kitchen />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/menu" element={<Menu />} />
         <Route path="/inventory" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Inventory /></RequireAuth>} />

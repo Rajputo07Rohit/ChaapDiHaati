@@ -111,6 +111,7 @@ export interface SalesOrder {
   order_type: OrderType;
   status: OrderStatus;
   payment_status: PaymentStatus;
+  kitchen_status: "PENDING" | "READY";
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;

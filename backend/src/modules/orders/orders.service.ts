@@ -34,6 +34,7 @@ export interface OrderRow {
   order_type: string;
   status: OrderStatus;
   payment_status: PaymentStatus;
+  kitchen_status: "PENDING" | "READY";
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;
@@ -64,6 +65,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     order_type: doc.orderType,
     status: doc.status,
     payment_status: doc.paymentStatus,
+    kitchen_status: doc.kitchenStatus,
     customer_name: doc.customerName,
     customer_phone: doc.customerPhone,
     delivery_address: doc.deliveryAddress,
@@ -150,10 +152,10 @@ export async function getOrderFull(id: string) {
 }
 
 export async function listOrders(
-  filters: { status?: string; businessDate?: string; limit?: number } = {}
-): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>> })[]> {
+  filters: { status?: string | string[]; businessDate?: string; limit?: number } = {}
+): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>>; items: ReturnType<typeof toItemRow>[] })[]> {
   const query: Record<string, unknown> = {};
-  if (filters.status) query.status = filters.status;
+  if (filters.status) query.status = Array.isArray(filters.status) ? { $in: filters.status } : filters.status;
   if (filters.businessDate) query.businessDate = filters.businessDate;
   let q = Order.find(query).sort({ createdAt: -1 });
   if (filters.limit) q = q.limit(filters.limit);
@@ -167,6 +169,7 @@ export async function listOrders(
 
   return docs.map((doc) => ({
     ...toOrderRow(doc),
+    items: doc.items.map(toItemRow),
     payments: doc.payments
       .filter((p) => p.status === "ACTIVE")
       .map((p) => {
@@ -893,6 +896,32 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus, us
     entityId: orderId,
     oldValue: { status: oldStatus },
     newValue: { status },
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * The kitchen's one action: flips kitchenStatus to READY. Deliberately does
+ * not touch `status`/`paymentStatus` — a counter sale may already be
+ * COMPLETED (paid, stock deducted) well before the food is actually
+ * cooked, so this tracks kitchen prep as a separate concern entirely.
+ */
+export async function markKitchenReady(orderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.kitchenStatus === "READY") return toOrderRow(order);
+
+  order.kitchenStatus = "READY";
+  order.updatedAt = nowIso();
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "ORDER_KITCHEN_READY",
+    entityType: "sales_order",
+    entityId: orderId,
+    newValue: { kitchenStatus: "READY" },
   });
 
   return getOrderOrThrow(orderId);

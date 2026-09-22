@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { MessageCircle, Phone, MapPin, User as UserIcon, Truck, Calendar } from "lucide-react";
@@ -6,7 +7,7 @@ import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
-import { Button, Card, EmptyState, Input, Modal, OrderStatusBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
+import { Button, Card, EmptyState, Input, KitchenStatusBadge, Modal, OrderStatusBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
 import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import { useAuth } from "../context/AuthContext";
@@ -27,6 +28,7 @@ function paymentModeLabel(order: SalesOrder): string {
 
 export function Orders() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState("");
   const [businessDate, setBusinessDate] = useState("");
@@ -255,6 +257,7 @@ export function Orders() {
                 <th className="text-left px-4 py-2.5">Date</th>
                 <th className="text-left px-4 py-2.5">Type</th>
                 <th className="text-left px-4 py-2.5">Status</th>
+                <th className="text-left px-4 py-2.5">Kitchen</th>
                 <th className="text-left px-4 py-2.5">Payment</th>
                 <th className="text-left px-4 py-2.5">Mode</th>
                 <th className="text-right px-4 py-2.5">Total</th>
@@ -265,7 +268,7 @@ export function Orders() {
               {ordersByDate.map(([date, dateOrders]) => (
                 <Fragment key={date}>
                   <tr key={`hdr-${date}`}>
-                    <td colSpan={9} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
+                    <td colSpan={10} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <Calendar size={14} />
@@ -299,6 +302,9 @@ export function Orders() {
                   <td className="px-4 py-2.5 text-slate-500">{o.order_type.replace("_", "-")}</td>
                   <td className="px-4 py-2.5">
                     <OrderStatusBadge status={o.status} />
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {["CANCELLED", "REFUNDED"].includes(o.status) ? <span className="text-slate-300">—</span> : <KitchenStatusBadge status={o.kitchen_status} />}
                   </td>
                   <td className="px-4 py-2.5">
                     <PaymentStatusBadge status={o.payment_status} />
@@ -347,6 +353,7 @@ export function Orders() {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <OrderStatusBadge status={detail.order.status} />
+                {!["CANCELLED", "REFUNDED"].includes(detail.order.status) && <KitchenStatusBadge status={detail.order.kitchen_status} />}
                 <PaymentStatusBadge status={detail.order.payment_status} />
               </div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -360,6 +367,24 @@ export function Orders() {
                       <MessageCircle size={14} /> Share on WhatsApp
                     </Button>
                   </>
+                )}
+                {detail.order.status === "COMPLETED" && (
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      navigate("/pos", {
+                        state: {
+                          prefillOrderType: detail.order.order_type,
+                          prefillCustomerName: detail.order.customer_name ?? "",
+                          prefillCustomerPhone: detail.order.customer_phone ?? "",
+                          prefillDeliveryAddress: detail.order.delivery_address ?? "",
+                          continuedFromOrderNumber: detail.order.order_number,
+                        },
+                      })
+                    }
+                  >
+                    Add More Items
+                  </Button>
                 )}
                 {canManage && NEXT_STATUS[detail.order.status] && (
                   <Button size="sm" variant="secondary" onClick={() => advanceStatusMutation.mutate(NEXT_STATUS[detail.order.status])}>
