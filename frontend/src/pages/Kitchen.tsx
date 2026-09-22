@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PageHeader } from "../components/ui/Primitives";
+import { toDdMmYyyy } from "../utils/date";
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
   DINE_IN: "Dine-in",
@@ -38,7 +39,8 @@ function useClockTick() {
 function OrderTicket({ order }: { order: SalesOrder }) {
   const queryClient = useQueryClient();
   const age = minutesAgo(order.created_at);
-  const urgent = age >= 15;
+  const urgent = order.kitchen_status === "PENDING" && age >= 15;
+  const ready = order.kitchen_status === "READY";
   const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
 
   // Kitchen prep is tracked independently of the order's own status —
@@ -55,12 +57,16 @@ function OrderTicket({ order }: { order: SalesOrder }) {
   });
 
   return (
-    <div className={`rounded-2xl border-2 bg-white shadow-sm overflow-hidden flex flex-col ${urgent ? "border-rose-400" : "border-slate-200"}`}>
-      <div className={`flex items-center justify-between px-4 py-3 ${urgent ? "bg-rose-50" : "bg-slate-50"}`}>
+    <div
+      className={`rounded-2xl border-2 bg-white shadow-sm overflow-hidden flex flex-col ${
+        ready ? "border-emerald-200 opacity-70" : urgent ? "border-rose-400" : "border-slate-200"
+      }`}
+    >
+      <div className={`flex items-center justify-between px-4 py-3 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
         <span className="text-xl font-extrabold text-slate-900">#{order.order_number}</span>
         <span
           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
-            urgent ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-600"
+            ready ? "bg-emerald-600 text-white" : urgent ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-600"
           }`}
         >
           <Clock size={12} /> {age === 0 ? "just now" : `${age} min`}
@@ -85,22 +91,31 @@ function OrderTicket({ order }: { order: SalesOrder }) {
         ))}
       </div>
 
-      <button
-        disabled={markReadyMutation.isPending}
-        onClick={() => markReadyMutation.mutate()}
-        className="w-full bg-emerald-600 text-white font-bold text-base py-3.5 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
-      >
-        {markReadyMutation.isPending ? "Marking Ready…" : "Mark Ready"}
-      </button>
+      {ready ? (
+        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-base py-3.5">
+          <CheckCircle2 size={18} /> Ready
+        </div>
+      ) : (
+        <button
+          disabled={markReadyMutation.isPending}
+          onClick={() => markReadyMutation.mutate()}
+          className="w-full bg-emerald-600 text-white font-bold text-base py-3.5 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
+        >
+          {markReadyMutation.isPending ? "Marking Ready…" : "Mark Ready"}
+        </button>
+      )}
     </div>
   );
 }
 
 export function Kitchen() {
   useClockTick();
+  const [businessDate, setBusinessDate] = useState(todayIso());
+  const [showReady, setShowReady] = useState(false);
+
   const { data, isLoading } = useQuery({
-    queryKey: ["kitchen-orders"],
-    queryFn: () => api.get<{ orders: SalesOrder[] }>(`/orders?businessDate=${todayIso()}&limit=200`),
+    queryKey: ["kitchen-orders", businessDate],
+    queryFn: () => api.get<{ orders: SalesOrder[] }>(`/orders?businessDate=${businessDate}&limit=200`),
     refetchInterval: 10_000,
   });
 
@@ -108,23 +123,54 @@ export function Kitchen() {
   // counter sale is typically already COMPLETED by the time it reaches
   // here, so this can't filter on order status at all, only on whether
   // the kitchen itself has marked it ready yet.
-  const pending = (data?.orders ?? [])
-    .filter((o) => o.kitchen_status === "PENDING" && o.status !== "CANCELLED" && o.status !== "REFUNDED")
+  const orders = (data?.orders ?? [])
+    .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED")
+    .filter((o) => showReady || o.kitchen_status === "PENDING")
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  const isToday = businessDate === todayIso();
 
   return (
     <div>
-      <PageHeader title="Kitchen" description="Today's orders waiting to be prepared. Tap Mark Ready once an order is done." />
+      <PageHeader
+        title="Kitchen"
+        description="Orders waiting to be prepared. Tap Mark Ready once an order is done."
+        actions={
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              onClick={() => setShowReady((v) => !v)}
+              className="text-xs font-semibold text-slate-500 underline underline-offset-2"
+            >
+              {showReady ? "Show pending only" : "Show ready too"}
+            </button>
+            <div className="flex items-center gap-1.5">
+              <Calendar size={14} className="text-slate-400" />
+              <input
+                type="date"
+                value={businessDate}
+                onChange={(e) => setBusinessDate(e.target.value || todayIso())}
+                className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-sm text-slate-900"
+              />
+              <span className="text-xs text-slate-500 font-medium tabular-nums">{toDdMmYyyy(businessDate)}</span>
+              {!isToday && (
+                <button onClick={() => setBusinessDate(todayIso())} className="text-xs font-semibold text-brand-600 underline underline-offset-2">
+                  Today
+                </button>
+              )}
+            </div>
+          </div>
+        }
+      />
       {isLoading && <div className="text-center text-slate-400 py-16">Loading…</div>}
-      {!isLoading && pending.length === 0 && (
+      {!isLoading && orders.length === 0 && (
         <div className="text-center text-slate-400 py-24">
           <ChefHat size={48} className="mx-auto mb-3 opacity-40" />
-          <div className="text-lg font-medium">All caught up — no orders waiting.</div>
+          <div className="text-lg font-medium">{showReady ? "No orders that day." : "All caught up — no orders waiting."}</div>
         </div>
       )}
-      {pending.length > 0 && (
+      {orders.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {pending.map((o) => (
+          {orders.map((o) => (
             <OrderTicket key={o.id} order={o} />
           ))}
         </div>
