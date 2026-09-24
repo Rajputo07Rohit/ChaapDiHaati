@@ -8,6 +8,13 @@ import { errorHandler } from "./middleware/errorHandler";
 
 export const app = express();
 
+// Render (and Netlify's API proxy in front of it) terminates TLS and
+// forwards requests through a proxy layer — without this, req.ip is the
+// proxy's own address for every request, which silently broke IP-based
+// rate limiting (everyone shared one bucket) and would make a login's
+// recorded IP useless.
+app.set("trust proxy", 1);
+
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());

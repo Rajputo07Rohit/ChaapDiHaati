@@ -19,6 +19,7 @@ import { Staff } from "./pages/Staff";
 import { SettingsPage } from "./pages/Settings";
 import { Discounts } from "./pages/Discounts";
 import { AuditLog } from "./pages/AuditLog";
+import { LoginActivity } from "./pages/LoginActivity";
 import { RiderDashboard } from "./pages/RiderDashboard";
 import { Role } from "./api/types";
 
@@ -28,11 +29,20 @@ function RoleHome() {
   return <Navigate to={user?.role === "RIDER" ? "/rider" : "/pos"} replace />;
 }
 
-function RequireAuth({ children, roles }: { children: JSX.Element; roles?: Role[] }) {
+function RequireAuth({
+  children,
+  roles,
+  requireSuperAdmin,
+}: {
+  children: JSX.Element;
+  roles?: Role[];
+  requireSuperAdmin?: boolean;
+}) {
   const { user, loading } = useAuth();
   if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(user.role)) return <RoleHome />;
+  if (requireSuperAdmin && !user.isSuperAdmin) return <RoleHome />;
   return children;
 }
 
@@ -65,6 +75,7 @@ export default function App() {
         <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
         <Route path="/discounts" element={<RequireAuth roles={["ADMIN"]}><Discounts /></RequireAuth>} />
         <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
+        <Route path="/login-activity" element={<RequireAuth roles={["ADMIN"]} requireSuperAdmin><LoginActivity /></RequireAuth>} />
         <Route path="/" element={<RoleHome />} />
       </Route>
       <Route path="*" element={<RoleHome />} />

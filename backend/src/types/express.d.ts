@@ -10,7 +10,9 @@ declare global {
         username: string;
         fullName: string;
         role: Role;
+        isSuperAdmin: boolean;
       };
+      sessionId?: string;
     }
   }
 }

@@ -5,6 +5,7 @@ export interface User {
   username: string;
   fullName: string;
   role: Role;
+  isSuperAdmin?: boolean;
 }
 
 export type PriceType = "HALF" | "FULL" | "SINGLE";

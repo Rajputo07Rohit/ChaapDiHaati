@@ -16,3 +16,5 @@ export * from "./AuditLog";
 export * from "./Counter";
 export * from "./HistoricalItemSale";
 export * from "./Discount";
+export * from "./LoginEvent";
+export * from "./Session";

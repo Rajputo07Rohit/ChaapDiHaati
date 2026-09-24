@@ -18,6 +18,7 @@ import {
   History,
   Percent,
   ChefHat,
+  ShieldCheck,
   Menu as MenuIcon,
   X,
   LogOut,
@@ -35,6 +36,7 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   roles: Role[];
+  superAdminOnly?: boolean;
 }
 
 const NAV: NavItem[] = [
@@ -55,6 +57,7 @@ const NAV: NavItem[] = [
   { to: "/discounts", label: "Discounts", icon: Percent, roles: ["ADMIN"] },
   { to: "/settings", label: "Settings", icon: SettingsIcon, roles: ["ADMIN"] },
   { to: "/audit-log", label: "Audit Log", icon: History, roles: ["ADMIN"] },
+  { to: "/login-activity", label: "Login Activity", icon: ShieldCheck, roles: ["ADMIN"], superAdminOnly: true },
 ];
 
 export function Layout() {
@@ -68,7 +71,7 @@ export function Layout() {
   }, [theme]);
 
   if (!user) return null;
-  const items = NAV.filter((i) => i.roles.includes(user.role));
+  const items = NAV.filter((i) => i.roles.includes(user.role) && (!i.superAdminOnly || user.isSuperAdmin));
 
   async function handleLogout() {
     await logout();
