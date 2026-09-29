@@ -45,6 +45,7 @@ export interface OrderRow {
   discount_value: number;
   item_discount_total_paise: number;
   discount_reason: string | null;
+  delivery_fee_paise: number;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
@@ -76,6 +77,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     discount_value: doc.discountValue,
     item_discount_total_paise: doc.itemDiscountTotalPaise,
     discount_reason: doc.discountReason,
+    delivery_fee_paise: doc.deliveryFeePaise,
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
@@ -185,7 +187,7 @@ export async function listOrders(
   }));
 }
 
-interface ResolvedOrderItem {
+export interface ResolvedOrderItem {
   menuItemId: string;
   itemName: string;
   categoryName: string | null;
@@ -216,7 +218,7 @@ function resolveDiscountAmount(basePaise: number, discountType: DiscountType, di
   return amount;
 }
 
-async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
+export async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
   return Promise.all(
     items.map(async (item) => {
       const menuItem = await getMenuItemOrThrow(item.menuItemId);
@@ -259,7 +261,7 @@ async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrder
  * discounts) — i.e. item discounts are taken first, then the overall
  * discount applies to whatever remains.
  */
-function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
+export function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
   const subtotal = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const itemDiscountTotal = resolvedItems.reduce((s, i) => s + i.itemDiscountPaise, 0);
   const baseForOrderDiscount = subtotal - itemDiscountTotal;
@@ -269,7 +271,7 @@ function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountTyp
   return { subtotal, itemDiscountTotal, orderDiscountPaise, net };
 }
 
-function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
+export function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
   const items: OrderItemSub[] = [];
   const discounts: OrderDiscountSub[] = [];
 
@@ -693,6 +695,116 @@ export async function recordPayment(orderId: string, payments: PaymentInput[], u
         entityId: orderId,
         oldValue: { paymentStatus: oldPaymentStatus, totalPaid: alreadyPaid },
         newValue: { paymentStatus: newPaymentStatus, totalPaid },
+      },
+      session
+    );
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * Corrects which payment method a specific payment was recorded against —
+ * e.g. staff rang it up as Cash but the customer actually paid by UPI.
+ * Reverses the ledger entry posted under the old method and re-posts an
+ * equivalent one under the new method, then repoints the payment row.
+ * Never touches amount/order status — this is a bookkeeping correction,
+ * not a new transaction. Admin/Manager only, same as refunds.
+ */
+export async function changePaymentMethod(
+  orderId: string,
+  paymentId: string,
+  newPaymentMethodId: string,
+  userId: string
+): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.status === "CANCELLED" || order.status === "REFUNDED") {
+    throw new ConflictError(`Cannot change payment method on an order that is ${order.status.toLowerCase()}.`);
+  }
+
+  const payment = order.payments.find((p) => p._id === paymentId && p.status === "ACTIVE");
+  if (!payment) throw new NotFoundError("Payment");
+
+  const newMethod = await getPaymentMethodOrThrow(newPaymentMethodId);
+  if (payment.paymentMethodId === newPaymentMethodId) return getOrderOrThrow(orderId);
+
+  const oldMethod = await getPaymentMethodOrThrow(payment.paymentMethodId);
+  const now = nowIso();
+
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    const docPayment = doc.payments.find((p) => p._id === paymentId)!;
+
+    if (oldMethod.type === "CASH") {
+      await recordCashTransaction(
+        {
+          businessDate: doc.businessDate,
+          txnType: "REFUND",
+          direction: "OUT",
+          amountPaise: docPayment.amountPaise,
+          referenceType: "ORDER",
+          referenceId: orderId,
+          reason: `Payment method corrected — order #${doc.orderNumber}`,
+          userId,
+        },
+        session
+      );
+    } else {
+      await recordBankTransaction(
+        {
+          businessDate: doc.businessDate,
+          txnType: "DEBIT",
+          amountPaise: docPayment.amountPaise,
+          description: `Payment method corrected (removed ${oldMethod.name}) — order #${doc.orderNumber}`,
+          category: "BUSINESS",
+          paymentMethodId: oldMethod.id,
+          userId,
+        },
+        session
+      );
+    }
+
+    if (newMethod.type === "CASH") {
+      await recordCashTransaction(
+        {
+          businessDate: doc.businessDate,
+          txnType: "SALE",
+          direction: "IN",
+          amountPaise: docPayment.amountPaise,
+          referenceType: "ORDER",
+          referenceId: orderId,
+          userId,
+        },
+        session
+      );
+    } else {
+      await recordBankTransaction(
+        {
+          businessDate: doc.businessDate,
+          txnType: "CREDIT",
+          amountPaise: docPayment.amountPaise,
+          description: `Payment method corrected (now ${newMethod.name}) — order #${doc.orderNumber}`,
+          category: "BUSINESS",
+          paymentMethodId: newMethod.id,
+          userId,
+        },
+        session
+      );
+    }
+
+    docPayment.paymentMethodId = newPaymentMethodId;
+    doc.updatedAt = now;
+    await doc.save({ session });
+
+    await recordAudit(
+      {
+        userId,
+        action: "PAYMENT_METHOD_CHANGED",
+        entityType: "sales_order",
+        entityId: orderId,
+        oldValue: { paymentMethodId: oldMethod.id, paymentMethodName: oldMethod.name },
+        newValue: { paymentMethodId: newMethod.id, paymentMethodName: newMethod.name },
       },
       session
     );

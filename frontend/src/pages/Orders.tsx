@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { MessageCircle, Phone, MapPin, User as UserIcon, Truck, Calendar } from "lucide-react";
+import { MessageCircle, Phone, MapPin, User as UserIcon, Truck, Calendar, Pencil, Eye, EyeOff } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
@@ -47,6 +47,9 @@ export function Orders() {
   const [refundAmount, setRefundAmount] = useState("");
   const [refundReason, setRefundReason] = useState("");
   const [refundMethodId, setRefundMethodId] = useState("");
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [editPaymentMethodId, setEditPaymentMethodId] = useState("");
+  const [showTotals, setShowTotals] = useState(false);
 
   const { data: pmData } = useQuery({
     queryKey: ["payment-methods"],
@@ -165,6 +168,18 @@ export function Orders() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record refund"),
   });
 
+  const changePaymentMethodMutation = useMutation({
+    mutationFn: () => api.patch(`/orders/${selected!.id}/payments/${editingPaymentId}/method`, { paymentMethodId: editPaymentMethodId }),
+    onSuccess: () => {
+      toast.success("Payment method updated");
+      setEditingPaymentId(null);
+      setEditPaymentMethodId("");
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update payment method"),
+  });
+
   // Refund is Admin/Manager only (real money reversal) — Cancel and
   // rider-assignment are open to any signed-in staff-side role
   // (Admin/Manager/Staff) — Riders never reach this page at all.
@@ -243,6 +258,14 @@ export function Orders() {
               <option value="CASH">Cash</option>
               <option value="ONLINE">Online</option>
             </Select>
+            <button
+              onClick={() => setShowTotals((v) => !v)}
+              title={showTotals ? "Hide totals" : "Show totals"}
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg px-2.5 py-2"
+            >
+              {showTotals ? <EyeOff size={14} /> : <Eye size={14} />}
+              {showTotals ? "Hide totals" : "Show totals"}
+            </button>
           </div>
         }
       />
@@ -278,9 +301,9 @@ export function Orders() {
                           </span>
                         </div>
                         <span className="tabular-nums">
-                          {formatPaise(
-                            dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0)
-                          )}
+                          {showTotals
+                            ? formatPaise(dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0))
+                            : "••••••"}
                         </span>
                       </div>
                     </td>
@@ -334,6 +357,21 @@ export function Orders() {
                         }}
                       >
                         Cancel
+                      </Button>
+                    )}
+                    {canRefund && o.status === "COMPLETED" && (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRefundTarget(o);
+                          setRefundType("FULL");
+                          setRefundAmount((o.net_total_paise / 100).toFixed(2));
+                          setRefundMethodId(o.payments?.[0]?.payment_method_id ?? pmData?.methods[0]?.id ?? "");
+                        }}
+                      >
+                        Refund
                       </Button>
                     )}
                   </td>
@@ -426,20 +464,6 @@ export function Orders() {
                     onClick={() => staffDeliverMutation.mutate({ orderId: detail.order.id })}
                   >
                     Mark Delivered
-                  </Button>
-                )}
-                {canRefund && detail.order.status === "COMPLETED" && (
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => {
-                      setRefundTarget(detail.order);
-                      setRefundType("FULL");
-                      setRefundAmount((detail.order.net_total_paise / 100).toFixed(2));
-                      setRefundMethodId(detail.order.payments?.[0]?.payment_method_id ?? pmData?.methods[0]?.id ?? "");
-                    }}
-                  >
-                    Refund
                   </Button>
                 )}
               </div>
@@ -535,12 +559,48 @@ export function Orders() {
             {detail.order.payments && detail.order.payments.length > 0 && (
               <div>
                 <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Payments</div>
-                {detail.order.payments.map((p) => (
-                  <div key={p.id} className="flex justify-between text-slate-600">
-                    <span>{p.payment_method_name}</span>
-                    <span>{formatPaise(p.amount_paise)}</span>
-                  </div>
-                ))}
+                {detail.order.payments.map((p) =>
+                  editingPaymentId === p.id ? (
+                    <div key={p.id} className="flex items-center gap-1.5 py-1">
+                      <Select value={editPaymentMethodId} onChange={(e) => setEditPaymentMethodId(e.target.value)} className="flex-1">
+                        {(pmData?.methods ?? []).map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </Select>
+                      <Button
+                        size="sm"
+                        disabled={!editPaymentMethodId || changePaymentMethodMutation.isPending}
+                        onClick={() => changePaymentMethodMutation.mutate()}
+                      >
+                        Save
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setEditingPaymentId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <div key={p.id} className="flex items-center justify-between text-slate-600 py-0.5">
+                      <span className="flex items-center gap-1.5">
+                        {p.payment_method_name}
+                        {canRefund && !["CANCELLED", "REFUNDED"].includes(detail.order.status) && (
+                          <button
+                            title="Change payment method"
+                            onClick={() => {
+                              setEditingPaymentId(p.id);
+                              setEditPaymentMethodId(p.payment_method_id);
+                            }}
+                            className="text-slate-300 hover:text-brand-600"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        )}
+                      </span>
+                      <span>{formatPaise(p.amount_paise)}</span>
+                    </div>
+                  )
+                )}
               </div>
             )}
             {detail.order.cancel_reason && (
