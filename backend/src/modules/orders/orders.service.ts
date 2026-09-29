@@ -45,7 +45,6 @@ export interface OrderRow {
   discount_value: number;
   item_discount_total_paise: number;
   discount_reason: string | null;
-  delivery_fee_paise: number;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
@@ -77,7 +76,6 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     discount_value: doc.discountValue,
     item_discount_total_paise: doc.itemDiscountTotalPaise,
     discount_reason: doc.discountReason,
-    delivery_fee_paise: doc.deliveryFeePaise,
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
@@ -187,7 +185,7 @@ export async function listOrders(
   }));
 }
 
-export interface ResolvedOrderItem {
+interface ResolvedOrderItem {
   menuItemId: string;
   itemName: string;
   categoryName: string | null;
@@ -218,7 +216,7 @@ function resolveDiscountAmount(basePaise: number, discountType: DiscountType, di
   return amount;
 }
 
-export async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
+async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
   return Promise.all(
     items.map(async (item) => {
       const menuItem = await getMenuItemOrThrow(item.menuItemId);
@@ -261,7 +259,7 @@ export async function resolveOrderItems(items: OrderItemInput[]): Promise<Resolv
  * discounts) — i.e. item discounts are taken first, then the overall
  * discount applies to whatever remains.
  */
-export function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
+function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
   const subtotal = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const itemDiscountTotal = resolvedItems.reduce((s, i) => s + i.itemDiscountPaise, 0);
   const baseForOrderDiscount = subtotal - itemDiscountTotal;
@@ -271,7 +269,7 @@ export function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDisc
   return { subtotal, itemDiscountTotal, orderDiscountPaise, net };
 }
 
-export function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
+function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
   const items: OrderItemSub[] = [];
   const discounts: OrderDiscountSub[] = [];
 
