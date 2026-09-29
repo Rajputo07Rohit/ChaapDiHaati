@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock, CheckCircle2, Calendar, MapPin } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PageHeader } from "../components/ui/Primitives";
@@ -129,6 +129,72 @@ function OrderTicket({ order }: { order: SalesOrder }) {
   );
 }
 
+/** Groups orders by business date (most recent date first, orders within
+ * a date oldest-first so the longest-waiting ticket is the first thing
+ * the kitchen sees). */
+function groupByDate(orders: SalesOrder[]): [string, SalesOrder[]][] {
+  const sorted = [...orders].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  const groups: [string, SalesOrder[]][] = [];
+  for (const o of sorted) {
+    const group = groups.find(([d]) => d === o.business_date);
+    if (group) group[1].push(o);
+    else groups.push([o.business_date, [o]]);
+  }
+  return groups.sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0));
+}
+
+function KitchenSection({
+  title,
+  icon,
+  accent,
+  orders,
+  emptyLabel,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  accent: string;
+  orders: SalesOrder[];
+  emptyLabel: string;
+}) {
+  const ordersByDate = groupByDate(orders);
+
+  return (
+    <section className="flex-1 min-w-0">
+      <div className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-white font-bold ${accent}`}>
+        {icon}
+        <span className="text-base">{title}</span>
+        <span className="ml-auto text-sm font-semibold bg-white/20 rounded-full px-2.5 py-0.5 tabular-nums">
+          {orders.length}
+        </span>
+      </div>
+
+      {ordersByDate.length === 0 && (
+        <div className="text-center text-slate-400 py-14 border border-dashed border-slate-200 rounded-2xl mt-3">
+          <ChefHat size={36} className="mx-auto mb-2 opacity-40" />
+          <div className="text-sm font-medium">{emptyLabel}</div>
+        </div>
+      )}
+
+      {ordersByDate.map(([date, dateOrders]) => (
+        <Fragment key={date}>
+          <div className="flex items-center gap-2 bg-slate-800 text-white text-sm font-bold px-4 py-2 rounded-xl mt-4 first:mt-3">
+            <Calendar size={14} />
+            {toDdMmYyyy(date)}
+            <span className="font-normal text-slate-300">
+              · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-3">
+            {dateOrders.map((o) => (
+              <OrderTicket key={o.id} order={o} />
+            ))}
+          </div>
+        </Fragment>
+      ))}
+    </section>
+  );
+}
+
 export function Kitchen() {
   useClockTick();
   const [businessDate, setBusinessDate] = useState(todayIso());
@@ -152,18 +218,14 @@ export function Kitchen() {
   // the kitchen itself has marked it ready yet.
   const filtered = (data?.orders ?? [])
     .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED")
-    .filter((o) => showReady || o.kitchen_status === "PENDING")
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    .filter((o) => showReady || o.kitchen_status === "PENDING");
 
-  // Grouped by date (most recent date first) so a stale pending order from
-  // yesterday reads as clearly separate from today's queue, not blended
-  // into the same undivided list.
-  const ordersByDate: [string, SalesOrder[]][] = [];
-  for (const o of filtered) {
-    const group = ordersByDate.find(([d]) => d === o.business_date);
-    if (group) group[1].push(o);
-    else ordersByDate.push([o.business_date, [o]]);
-  }
+  // Dine-in and takeaway are cooked-and-served-on-the-spot; delivery
+  // (and online, which is fulfilled the same way) has its own prep/pack
+  // rhythm and a rider waiting on it — splitting the board keeps the two
+  // workflows from competing for the same visual queue.
+  const dineInTakeaway = filtered.filter((o) => o.order_type === "DINE_IN" || o.order_type === "TAKEAWAY");
+  const delivery = filtered.filter((o) => o.order_type === "DELIVERY" || o.order_type === "ONLINE");
 
   const isToday = businessDate === todayIso();
 
@@ -201,28 +263,31 @@ export function Kitchen() {
         }
       />
       {isLoading && <div className="text-center text-slate-400 py-16">Loading…</div>}
-      {!isLoading && ordersByDate.length === 0 && (
+      {!isLoading && filtered.length === 0 && (
         <div className="text-center text-slate-400 py-24">
           <ChefHat size={48} className="mx-auto mb-3 opacity-40" />
           <div className="text-lg font-medium">{showReady ? "No orders that day." : "All caught up — no orders waiting."}</div>
         </div>
       )}
-      {ordersByDate.map(([date, dateOrders]) => (
-        <Fragment key={date}>
-          <div className="flex items-center gap-2 bg-slate-800 text-white text-sm font-bold px-4 py-2 rounded-xl mt-6 first:mt-0">
-            <Calendar size={14} />
-            {toDdMmYyyy(date)}
-            <span className="font-normal text-slate-300">
-              · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-3">
-            {dateOrders.map((o) => (
-              <OrderTicket key={o.id} order={o} />
-            ))}
-          </div>
-        </Fragment>
-      ))}
+      {!isLoading && filtered.length > 0 && (
+        <div className="flex flex-col xl:flex-row gap-6 mt-2">
+          <KitchenSection
+            title="Dine-in & Takeaway"
+            icon={<UtensilsCrossed size={18} />}
+            accent="bg-blue-600"
+            orders={dineInTakeaway}
+            emptyLabel={showReady ? "No dine-in/takeaway orders that day." : "No dine-in/takeaway orders waiting."}
+          />
+          <div className="hidden xl:block w-px bg-slate-200" />
+          <KitchenSection
+            title="Delivery"
+            icon={<Bike size={18} />}
+            accent="bg-orange-600"
+            orders={delivery}
+            emptyLabel={showReady ? "No delivery orders that day." : "No delivery orders waiting."}
+          />
+        </div>
+      )}
     </div>
   );
 }
