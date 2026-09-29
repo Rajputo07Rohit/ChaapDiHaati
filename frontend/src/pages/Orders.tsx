@@ -452,6 +452,20 @@ export function Orders() {
                     Mark Delivered
                   </Button>
                 )}
+                {canRefund && detail.order.status === "COMPLETED" && (
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => {
+                      setRefundTarget(detail.order);
+                      setRefundType("FULL");
+                      setRefundAmount((detail.order.net_total_paise / 100).toFixed(2));
+                      setRefundMethodId(detail.order.payments?.[0]?.payment_method_id ?? pmData?.methods[0]?.id ?? "");
+                    }}
+                  >
+                    Refund
+                  </Button>
+                )}
               </div>
             </div>
 
