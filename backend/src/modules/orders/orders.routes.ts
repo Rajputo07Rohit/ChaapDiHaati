@@ -137,22 +137,6 @@ ordersRouter.post(
   })
 );
 
-const changePaymentMethodSchema = z.object({ paymentMethodId: z.string() });
-
-// Corrects which method a payment was recorded under (e.g. rung up as Cash,
-// actually paid by UPI) — Admin/Manager only, same bar as a refund, since it
-// moves money between ledgers.
-ordersRouter.patch(
-  "/:id/payments/:paymentId/method",
-  requireAuth,
-  isManagerUp,
-  asyncHandler(async (req, res) => {
-    const input = changePaymentMethodSchema.parse(req.body);
-    const order = await ordersService.changePaymentMethod(req.params.id, req.params.paymentId, input.paymentMethodId, req.user!.id);
-    res.json({ order: await ordersService.getOrderFull(order.id) });
-  })
-);
-
 const statusSchema = z.object({ status: z.enum(["PREPARING", "READY", "OUT_FOR_DELIVERY"]) });
 
 // Single-step kitchen-advance / "send for delivery" action. Staff-only —
