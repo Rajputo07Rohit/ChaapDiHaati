@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
-import { isAnyRole, isAnyRoleOrRider, isManagerUp, isRider } from "../../middleware/rbac";
+import { isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
 import * as ordersService from "./orders.service";
 
 export const ordersRouter = Router();
@@ -191,7 +191,7 @@ const refundSchema = z.object({
 ordersRouter.post(
   "/:id/refund",
   requireAuth,
-  isManagerUp,
+  isAnyRole,
   asyncHandler(async (req, res) => {
     const input = refundSchema.parse(req.body);
     const order = await ordersService.refundOrder(req.params.id, input, req.user!.id, req.user!.role);

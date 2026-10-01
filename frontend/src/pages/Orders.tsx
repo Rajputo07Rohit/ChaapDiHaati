@@ -166,11 +166,10 @@ export function Orders() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not record refund"),
   });
 
-  // Refund is Admin/Manager only (real money reversal) — Cancel and
-  // rider-assignment are open to any signed-in staff-side role
-  // (Admin/Manager/Staff) — Riders never reach this page at all.
+  // Refund, Cancel, and rider-assignment are all open to any signed-in
+  // staff-side role (Admin/Manager/Staff) — Riders never reach this page at all.
   const canManage = user?.role === "ADMIN" || user?.role === "MANAGER" || user?.role === "STAFF";
-  const canRefund = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const canRefund = canManage;
 
   const { data: riderOptions } = useQuery({
     queryKey: ["rider-options"],
@@ -343,21 +342,6 @@ export function Orders() {
                         }}
                       >
                         Cancel
-                      </Button>
-                    )}
-                    {canRefund && o.status === "COMPLETED" && (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRefundTarget(o);
-                          setRefundType("FULL");
-                          setRefundAmount((o.net_total_paise / 100).toFixed(2));
-                          setRefundMethodId(o.payments?.[0]?.payment_method_id ?? pmData?.methods[0]?.id ?? "");
-                        }}
-                      >
-                        Refund
                       </Button>
                     )}
                   </td>
