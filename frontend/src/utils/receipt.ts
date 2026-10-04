@@ -4,6 +4,7 @@ import { priceTypeLabelFor } from "./billFormat";
 import logoBase64 from "../assets/logo-receipt-base64.txt?raw";
 
 const LOGO_DATA_URI = `data:image/png;base64,${logoBase64}`;
+const GOOGLE_REVIEW_URL = "https://maps.app.goo.gl/rTocnqdde3bYs54b9";
 
 /**
  * Prints through a hidden iframe on the current page instead of a new tab —
@@ -92,6 +93,7 @@ export function printReceipt(order: SalesOrder, restaurantName = "Chaap Di Haati
   .grand { font-weight: bold; font-size: 14px; }
   .center { text-align: center; }
   .foot { text-align: center; font-size: 11px; margin-top: 10px; }
+  .review { text-align: center; font-size: 10px; margin-top: 6px; word-break: break-all; }
   @media print { body { width: auto; } }
 </style>
 </head>
@@ -130,6 +132,7 @@ export function printReceipt(order: SalesOrder, restaurantName = "Chaap Di Haati
   }
   <hr>
   <div class="foot">Thank you — visit again!</div>
+  <div class="review">Loved your experience? Rate us on Google: ${GOOGLE_REVIEW_URL}</div>
 </body>
 </html>`;
 

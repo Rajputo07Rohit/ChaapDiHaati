@@ -3,6 +3,7 @@ import { formatPaise } from "./money";
 import { orderTypeLabelFor, priceTypeLabelFor } from "./billFormat";
 
 const DIVIDER = "━━━━━━━━━━━━━━━━━━";
+const GOOGLE_REVIEW_URL = "https://maps.app.goo.gl/rTocnqdde3bYs54b9";
 
 /**
  * Accepts the common ways someone types an Indian mobile number — bare
@@ -99,6 +100,9 @@ export function buildBillMessage(order: SalesOrder, profile: BusinessProfile, cu
   out.push(`🙏 Thank you for ordering from ${profile.businessName}!`);
   out.push("");
   out.push(`❤️ We hope you enjoyed your meal.`);
+  out.push("");
+  out.push(`⭐ Loved your experience? Please rate/review us on Google:`);
+  out.push(GOOGLE_REVIEW_URL);
   out.push("");
   out.push(`📍 ${profile.businessName}`);
   if (addressLine) out.push(addressLine);
