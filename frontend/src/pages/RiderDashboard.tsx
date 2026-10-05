@@ -25,7 +25,15 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
   const queryClient = useQueryClient();
   const phone = order.customer_phone?.trim();
   const address = order.delivery_address?.trim();
-  const mapsUrl = address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : null;
+  // GPS coordinates (shared by the customer at checkout) open turn-by-turn
+  // directions straight away; falling back to a text-address search is the
+  // best we can do for staff-entered deliveries that never had a precise pin.
+  const mapsUrl =
+    order.delivery_latitude != null && order.delivery_longitude != null
+      ? `https://www.google.com/maps/dir/?api=1&destination=${order.delivery_latitude},${order.delivery_longitude}`
+      : address
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+        : null;
   const remaining = remainingPaise(order);
   const alreadyPaid = order.net_total_paise - remaining;
   const isDelivered = order.status !== "OUT_FOR_DELIVERY";
@@ -133,15 +141,17 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
         </div>
       )}
 
-      {address && (
+      {(address || mapsUrl) && (
         <div>
-          <div className="flex items-start gap-2 text-sm text-slate-700">
-            <MapPin size={16} className="text-slate-400 shrink-0 mt-0.5" />
-            <span>{address}</span>
-          </div>
+          {address && (
+            <div className="flex items-start gap-2 text-sm text-slate-700">
+              <MapPin size={16} className="text-slate-400 shrink-0 mt-0.5" />
+              <span>{address}</span>
+            </div>
+          )}
           {mapsUrl && (
             <a href={mapsUrl} target="_blank" rel="noreferrer" className="inline-block mt-1 text-xs font-semibold text-blue-600 underline">
-              OPEN MAP
+              {order.delivery_latitude != null ? "NAVIGATE" : "OPEN MAP"}
             </a>
           )}
         </div>

@@ -36,6 +36,18 @@ const apiLimiter = rateLimit({
 });
 app.use("/api", apiLimiter);
 
+// Customer self-order routes are reachable by anyone who scans a table QR
+// code, with no staff login — a much tighter cap than staff traffic to
+// blunt spam/fake-order attempts before they ever reach order creation.
+const publicLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: { message: "Too many requests. Please slow down.", code: "RATE_LIMITED" } },
+});
+app.use("/api/public", publicLimiter);
+
 app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 app.use("/api", apiRouter);

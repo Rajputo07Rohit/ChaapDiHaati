@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Separate repo (ChaapDiHaati-customer), deployed independently
+customer/
 backend/data/
 !backend/data/.gitkeep
 backups/

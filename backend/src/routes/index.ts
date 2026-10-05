@@ -18,6 +18,9 @@ import { auditRouter } from "../modules/audit/audit.routes";
 import { settingsRouter } from "../modules/settings/settings.routes";
 import { backupRouter } from "../modules/backup/backup.routes";
 import { discountsRouter } from "../modules/discounts/discounts.routes";
+import { customerMenuRouter } from "../modules/customerMenu/customerMenu.routes";
+import { customerOrdersRouter } from "../modules/customerOrders/customerOrders.routes";
+import { customerAuthRouter } from "../modules/customerAuth/customerAuth.routes";
 
 export const apiRouter = Router();
 
@@ -40,3 +43,10 @@ apiRouter.use("/audit-logs", auditRouter);
 apiRouter.use("/settings", settingsRouter);
 apiRouter.use("/backup", backupRouter);
 apiRouter.use("/discounts", discountsRouter);
+
+// Customer-facing self-order channel (QR scan → order). Unauthenticated by
+// staff on purpose — requireCustomerAuth (2Factor.in phone OTP) gates
+// order creation instead. Kept fully separate from the routes above.
+apiRouter.use("/public/auth", customerAuthRouter);
+apiRouter.use("/public/menu", customerMenuRouter);
+apiRouter.use("/public/orders", customerOrdersRouter);

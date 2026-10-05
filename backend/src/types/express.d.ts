@@ -13,6 +13,10 @@ declare global {
         isSuperAdmin: boolean;
       };
       sessionId?: string;
+      /** Set by requireCustomerAuth for the customer-facing /api/public/* routes — entirely separate from `user` (staff). */
+      customer?: {
+        phone: string;
+      };
     }
   }
 }

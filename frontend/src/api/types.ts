@@ -116,6 +116,8 @@ export interface SalesOrder {
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;
+  delivery_latitude: number | null;
+  delivery_longitude: number | null;
   assigned_rider_id: string | null;
   delivered_at: string | null;
   subtotal_paise: number;

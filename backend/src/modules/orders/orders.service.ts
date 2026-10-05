@@ -38,6 +38,8 @@ export interface OrderRow {
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;
+  delivery_latitude: number | null;
+  delivery_longitude: number | null;
   assigned_rider_id: string | null;
   subtotal_paise: number;
   discount_paise: number;
@@ -45,6 +47,7 @@ export interface OrderRow {
   discount_value: number;
   item_discount_total_paise: number;
   discount_reason: string | null;
+  delivery_fee_paise: number;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
@@ -69,6 +72,8 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     customer_name: doc.customerName,
     customer_phone: doc.customerPhone,
     delivery_address: doc.deliveryAddress,
+    delivery_latitude: doc.deliveryLatitude,
+    delivery_longitude: doc.deliveryLongitude,
     assigned_rider_id: doc.assignedRiderId,
     subtotal_paise: doc.subtotalPaise,
     discount_paise: doc.discountPaise,
@@ -76,6 +81,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     discount_value: doc.discountValue,
     item_discount_total_paise: doc.itemDiscountTotalPaise,
     discount_reason: doc.discountReason,
+    delivery_fee_paise: doc.deliveryFeePaise,
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
@@ -216,7 +222,7 @@ function resolveDiscountAmount(basePaise: number, discountType: DiscountType, di
   return amount;
 }
 
-async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
+export async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
   return Promise.all(
     items.map(async (item) => {
       const menuItem = await getMenuItemOrThrow(item.menuItemId);
@@ -259,7 +265,7 @@ async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrder
  * discounts) — i.e. item discounts are taken first, then the overall
  * discount applies to whatever remains.
  */
-function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
+export function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountType: DiscountType, orderDiscountValue: number) {
   const subtotal = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const itemDiscountTotal = resolvedItems.reduce((s, i) => s + i.itemDiscountPaise, 0);
   const baseForOrderDiscount = subtotal - itemDiscountTotal;
@@ -269,7 +275,7 @@ function computeOrderTotals(resolvedItems: ResolvedOrderItem[], orderDiscountTyp
   return { subtotal, itemDiscountTotal, orderDiscountPaise, net };
 }
 
-function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
+export function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, discountReason: string | undefined): { items: OrderItemSub[]; discounts: OrderDiscountSub[] } {
   const items: OrderItemSub[] = [];
   const discounts: OrderDiscountSub[] = [];
 

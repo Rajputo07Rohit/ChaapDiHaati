@@ -19,4 +19,13 @@ export const env = {
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS || "10", 10),
   isProd: process.env.NODE_ENV === "production",
+  // Optional: customer-facing phone OTP via 2Factor.in. Left unset until
+  // that's configured — requireCustomerAuth/sendOtp report a clear config
+  // error rather than the app failing to boot.
+  twoFactorApiKey: process.env.TWOFACTOR_API_KEY,
+  // Optional: Razorpay test-mode checkout for customer self-orders. Left
+  // unset until configured — createRazorpayOrder reports a clear config
+  // error rather than the app failing to boot.
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET,
 };

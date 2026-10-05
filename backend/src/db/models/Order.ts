@@ -77,6 +77,9 @@ export interface OrderDoc {
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
+  /** Only ever set for customer self-ordered DELIVERY, from the browser's geolocation — lets the rider open turn-by-turn navigation instead of a text-address search. */
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
   assignedRiderId: string | null;
   subtotalPaise: number;
   discountPaise: number;
@@ -84,10 +87,14 @@ export interface OrderDoc {
   discountValue: number;
   itemDiscountTotalPaise: number;
   discountReason: string | null;
+  /** Only ever non-zero for customer self-ordered DELIVERY (tiered by subtotal, computed server-side). Staff-created orders always default to 0. */
+  deliveryFeePaise: number;
   netTotalPaise: number;
   cancelReason: string | null;
   notes: string | null;
   stockOverride: boolean;
+  /** Client-generated key for the customer self-order flow — a retried/duplicated POST with the same key returns the existing order instead of creating a second one. Null for staff-created orders. */
+  clientIdempotencyKey: string | null;
   createdBy: string | null;
   confirmedAt: string | null;
   deliveredAt: string | null;
@@ -157,17 +164,25 @@ const orderSchema = new Schema<OrderDoc>({
   customerName: { type: String, default: null },
   customerPhone: { type: String, default: null },
   deliveryAddress: { type: String, default: null },
+  deliveryLatitude: { type: Number, default: null },
+  deliveryLongitude: { type: Number, default: null },
   assignedRiderId: { type: String, default: null, ref: "User" },
   subtotalPaise: { type: Number, required: true, default: 0 },
   discountPaise: { type: Number, required: true, default: 0 },
   discountType: { type: String, required: true, enum: ["FLAT", "PERCENTAGE"], default: "FLAT" },
   discountValue: { type: Number, required: true, default: 0 },
   itemDiscountTotalPaise: { type: Number, required: true, default: 0 },
+  deliveryFeePaise: { type: Number, required: true, default: 0 },
   discountReason: { type: String, default: null },
   netTotalPaise: { type: Number, required: true, default: 0 },
   cancelReason: { type: String, default: null },
   notes: { type: String, default: null },
   stockOverride: { type: Boolean, required: true, default: false },
+  // No `default: null` here on purpose — a sparse unique index only excludes
+  // documents where the field is actually absent, not ones where it's set
+  // to null. Staff-created orders (which never pass this) must leave the
+  // field entirely unset, or every one of them would collide on `null`.
+  clientIdempotencyKey: { type: String },
   createdBy: { type: String, default: null, ref: "User" },
   confirmedAt: { type: String, default: null },
   deliveredAt: { type: String, default: null },
@@ -183,6 +198,7 @@ orderSchema.index({ businessDate: 1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ assignedRiderId: 1 });
 orderSchema.index({ createdAt: -1 });
+orderSchema.index({ clientIdempotencyKey: 1 }, { unique: true, sparse: true });
 
 export const Order = model<OrderDoc>("Order", orderSchema);
 
