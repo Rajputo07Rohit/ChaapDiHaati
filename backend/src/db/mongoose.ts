@@ -5,6 +5,13 @@ mongoose.set("strictQuery", true);
 
 export async function connectMongo(): Promise<void> {
   await mongoose.connect(env.mongodbUri);
+  // Mongoose builds indexes in the background by default — awaiting them
+  // here closes a real race: e.g. two near-simultaneous customer orders
+  // with the same idempotencyKey are only deduped by the unique index on
+  // clientIdempotencyKey, and without this, both could insert successfully
+  // during the (normally brief, but non-zero) window before that index
+  // finishes building, right after a fresh connect/deploy.
+  await Promise.all(Object.values(mongoose.connection.models).map((model) => model.init()));
 }
 
 export async function disconnectMongo(): Promise<void> {
