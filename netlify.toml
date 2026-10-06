@@ -13,6 +13,14 @@
   status = 200
   force = true
 
+# Admin-uploaded images (menu item photos, banner carousel) live on the
+# Render backend's disk, not in this static site's build output.
+[[redirects]]
+  from = "/uploads/*"
+  to = "https://chaapdihaati.onrender.com/uploads/:splat"
+  status = 200
+  force = true
+
 # SPA fallback so client-side routes (e.g. /pos, /orders) don't 404 on refresh.
 [[redirects]]
   from = "/*"

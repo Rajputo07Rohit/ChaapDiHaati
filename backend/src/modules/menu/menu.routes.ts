@@ -53,6 +53,7 @@ const updateItemSchema = z.object({
   status: z.enum(["ACTIVE", "UNAVAILABLE", "DISCONTINUED"]).optional(),
   halfLabel: z.string().optional(),
   fullLabel: z.string().optional(),
+  imageUrl: z.string().nullable().optional(),
   halfPricePaise: z.number().int().min(0).optional(),
   fullPricePaise: z.number().int().min(0).optional(),
   singlePricePaise: z.number().int().min(0).optional(),
@@ -66,7 +67,7 @@ menuRouter.patch(
     const input = updateItemSchema.parse(req.body);
     const existing = await menuService.getMenuItemOrThrow(req.params.id);
 
-    if (input.name || input.status || input.halfLabel || input.fullLabel) {
+    if (input.name || input.status || input.halfLabel || input.fullLabel || input.imageUrl !== undefined) {
       await menuService.updateMenuItemFields(req.params.id, input);
       await recordAudit({
         userId: req.user!.id,
@@ -81,6 +82,22 @@ menuRouter.patch(
     if (input.fullPricePaise != null) await menuService.setMenuPrice(req.params.id, "FULL", input.fullPricePaise, req.user!.id);
     if (input.singlePricePaise != null) await menuService.setMenuPrice(req.params.id, "SINGLE", input.singlePricePaise, req.user!.id);
 
+    res.json({ item: await menuService.getMenuItemOrThrow(req.params.id) });
+  })
+);
+
+const setAddonsSchema = z.object({
+  addons: z.array(z.object({ name: z.string().min(1), pricePaise: z.number().int().min(0), active: z.boolean().optional() })),
+});
+
+menuRouter.put(
+  "/:id/addons",
+  requireAuth,
+  isAdmin,
+  asyncHandler(async (req, res) => {
+    const input = setAddonsSchema.parse(req.body);
+    await menuService.setMenuItemAddons(req.params.id, input.addons);
+    await recordAudit({ userId: req.user!.id, action: "MENU_ITEM_ADDONS_UPDATED", entityType: "menu_item", entityId: req.params.id, newValue: input.addons });
     res.json({ item: await menuService.getMenuItemOrThrow(req.params.id) });
   })
 );

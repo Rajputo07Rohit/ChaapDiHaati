@@ -6,6 +6,13 @@ import { NotFoundError, ValidationError } from "../../utils/errors";
 
 export type PriceType = "HALF" | "FULL" | "SINGLE";
 
+export interface MenuItemAddonRow {
+  id: string;
+  name: string;
+  price_paise: number;
+  active: boolean;
+}
+
 export interface MenuItemRow {
   id: string;
   category_id: string;
@@ -18,6 +25,8 @@ export interface MenuItemRow {
   full_label: string;
   status: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
   sort_order: number;
+  addons: MenuItemAddonRow[];
+  image_url: string | null;
 }
 
 export interface CurrentPriceRow {
@@ -38,6 +47,8 @@ function toItemRow(doc: MenuItemDoc): MenuItemRow {
     full_label: doc.fullLabel,
     status: doc.status,
     sort_order: doc.sortOrder,
+    addons: doc.addons.map((a) => ({ id: a._id, name: a.name, price_paise: a.pricePaise, active: a.active })),
+    image_url: doc.imageUrl,
   };
 }
 
@@ -161,7 +172,13 @@ export async function createMenuItem(input: {
 
 export async function updateMenuItemFields(
   id: string,
-  changes: { name?: string; status?: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED"; halfLabel?: string; fullLabel?: string }
+  changes: {
+    name?: string;
+    status?: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
+    halfLabel?: string;
+    fullLabel?: string;
+    imageUrl?: string | null;
+  }
 ): Promise<void> {
   const doc = await MenuItem.findById(id);
   if (!doc) throw new NotFoundError("Menu item");
@@ -169,5 +186,23 @@ export async function updateMenuItemFields(
   if (changes.status !== undefined) doc.status = changes.status;
   if (changes.halfLabel !== undefined) doc.halfLabel = changes.halfLabel;
   if (changes.fullLabel !== undefined) doc.fullLabel = changes.fullLabel;
+  if (changes.imageUrl !== undefined) doc.imageUrl = changes.imageUrl;
+  await doc.save();
+}
+
+/**
+ * Replaces this item's whole add-ons list (e.g. "Extra Cream" ₹20). Past
+ * orders are unaffected — they keep their own name/price snapshot taken at
+ * order time (OrderItemAddonSub), so editing or removing an addon here
+ * never rewrites what a historical order shows it charged.
+ */
+export async function setMenuItemAddons(id: string, addons: { name: string; pricePaise: number; active?: boolean }[]): Promise<void> {
+  const doc = await MenuItem.findById(id);
+  if (!doc) throw new NotFoundError("Menu item");
+  for (const a of addons) {
+    if (!a.name.trim()) throw new ValidationError("Add-on name cannot be empty.");
+    if (a.pricePaise < 0) throw new ValidationError("Add-on price cannot be negative.");
+  }
+  doc.addons = addons.map((a) => ({ _id: newId("addon"), name: a.name.trim(), pricePaise: a.pricePaise, active: a.active ?? true }));
   await doc.save();
 }

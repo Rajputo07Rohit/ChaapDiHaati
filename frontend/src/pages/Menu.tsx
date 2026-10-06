@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import { MenuCategory, MenuItem, PriceType } from "../api/types";
+import { MenuCategory, MenuItem, MenuItemAddon, PriceType } from "../api/types";
 import { formatPaise, rupeesToPaise } from "../utils/money";
 import { costPerDisplayUnit, displayUnitFor, formatQty } from "../utils/units";
 import { Badge, Button, Card, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
@@ -233,6 +233,67 @@ function DetailModal({
   );
 }
 
+interface AddonDraft {
+  name: string;
+  price: string;
+}
+
+function AddonsEditor({ item, onSaved }: { item: MenuItem; onSaved: () => void }) {
+  const [rows, setRows] = useState<AddonDraft[]>([]);
+
+  useEffect(() => {
+    setRows(item.addons.map((a) => ({ name: a.name, price: (a.price_paise / 100).toString() })));
+  }, [item]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.put(`/menu/${item.id}/addons`, {
+        addons: rows.filter((r) => r.name.trim()).map((r) => ({ name: r.name.trim(), pricePaise: rupeesToPaise(parseFloat(r.price) || 0) })),
+      }),
+    onSuccess: () => {
+      toast.success("Add-ons updated");
+      onSaved();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update add-ons"),
+  });
+
+  return (
+    <div className="space-y-2">
+      <label className="text-xs font-medium text-slate-500">Add-ons (e.g. Extra Cream, Extra Cheese)</label>
+      {rows.map((row, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <Input
+            placeholder="Add-on name"
+            value={row.name}
+            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+            className="flex-1"
+          />
+          <Input
+            type="number"
+            min={0}
+            placeholder="₹"
+            value={row.price}
+            onChange={(e) => setRows(rows.map((r, j) => (j === i ? { ...r, price: e.target.value } : r)))}
+            className="w-20"
+          />
+          <button onClick={() => setRows(rows.filter((_, j) => j !== i))} className="text-slate-400 hover:text-rose-600 shrink-0" aria-label="Remove add-on">
+            <X size={16} />
+          </button>
+        </div>
+      ))}
+      <button
+        onClick={() => setRows([...rows, { name: "", price: "" }])}
+        className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+      >
+        <Plus size={13} /> Add another
+      </button>
+      <Button size="sm" variant="secondary" className="w-full" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+        {mutation.isPending ? "Saving…" : "Save Add-ons"}
+      </Button>
+    </div>
+  );
+}
+
 function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onClose: () => void; onSaved: () => void }) {
   const [half, setHalf] = useState("");
   const [full, setFull] = useState("");
@@ -298,6 +359,9 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
         <Button className="w-full" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
           {mutation.isPending ? "Saving…" : "Save"}
         </Button>
+        <div className="border-t border-slate-100 pt-3">
+          <AddonsEditor item={item} onSaved={onSaved} />
+        </div>
       </div>
     </Modal>
   );

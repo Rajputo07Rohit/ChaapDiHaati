@@ -21,6 +21,8 @@ import { discountsRouter } from "../modules/discounts/discounts.routes";
 import { customerMenuRouter } from "../modules/customerMenu/customerMenu.routes";
 import { customerOrdersRouter } from "../modules/customerOrders/customerOrders.routes";
 import { customerAuthRouter } from "../modules/customerAuth/customerAuth.routes";
+import { promoCodesAdminRouter, promoCodesPublicRouter } from "../modules/promoCodes/promoCodes.routes";
+import { bannersAdminRouter, bannersPublicRouter } from "../modules/banners/banners.routes";
 
 export const apiRouter = Router();
 
@@ -43,6 +45,8 @@ apiRouter.use("/audit-logs", auditRouter);
 apiRouter.use("/settings", settingsRouter);
 apiRouter.use("/backup", backupRouter);
 apiRouter.use("/discounts", discountsRouter);
+apiRouter.use("/promo-codes", promoCodesAdminRouter);
+apiRouter.use("/banners", bannersAdminRouter);
 
 // Customer-facing self-order channel (QR scan → order). Unauthenticated by
 // staff on purpose — requireCustomerAuth (2Factor.in phone OTP) gates
@@ -50,3 +54,5 @@ apiRouter.use("/discounts", discountsRouter);
 apiRouter.use("/public/auth", customerAuthRouter);
 apiRouter.use("/public/menu", customerMenuRouter);
 apiRouter.use("/public/orders", customerOrdersRouter);
+apiRouter.use("/public/promo-codes", promoCodesPublicRouter);
+apiRouter.use("/public/banners", bannersPublicRouter);

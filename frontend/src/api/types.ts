@@ -16,6 +16,13 @@ export interface MenuPrice {
   price_paise: number;
 }
 
+export interface MenuItemAddon {
+  id: string;
+  name: string;
+  price_paise: number;
+  active: boolean;
+}
+
 export interface MenuItem {
   id: string;
   category_id: string;
@@ -28,6 +35,8 @@ export interface MenuItem {
   full_label: string;
   status: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
   prices: MenuPrice[];
+  addons: MenuItemAddon[];
+  image_url: string | null;
 }
 
 export interface MenuCategory {
@@ -70,6 +79,7 @@ export interface InventoryItem {
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
 export type OrderStatus =
   | "DRAFT"
+  | "PENDING_ACCEPTANCE"
   | "CONFIRMED"
   | "PREPARING"
   | "READY"
@@ -79,6 +89,12 @@ export type OrderStatus =
   | "CANCELLED"
   | "REFUNDED";
 export type PaymentStatus = "UNPAID" | "PARTIAL" | "PAID" | "REFUNDED";
+
+export interface OrderItemAddon {
+  id: string;
+  name: string;
+  unit_price_paise: number;
+}
 
 export interface SalesOrderItem {
   id: string;
@@ -95,6 +111,7 @@ export interface SalesOrderItem {
   cogs_paise: number | null;
   special_instructions: string | null;
   status: string;
+  addons: OrderItemAddon[];
 }
 
 export interface Payment {

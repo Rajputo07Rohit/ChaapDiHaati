@@ -80,6 +80,7 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({
         orderType: "DINE_IN",
+        customerName: "Test Customer",
         tableLabel: "T4",
         items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 2 }],
       });
@@ -87,10 +88,10 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
     expect(dineIn.body.order.net_total_paise).toBe(50000); // 2 x 250
     expect(dineIn.body.order.delivery_fee_paise).toBe(0);
     // Response must NOT leak internal/staff-only fields.
-    const leakedKeys = ["cogs_paise", "created_by", "discount_reason", "cancel_reason", "items", "payments"];
+    const leakedKeys = ["cogs_paise", "created_by", "discount_reason", "items", "payments"];
     for (const k of leakedKeys) expect(dineIn.body.order).not.toHaveProperty(k);
     expect(Object.keys(dineIn.body.order).sort()).toEqual(
-      ["created_at", "delivery_fee_paise", "id", "net_total_paise", "notes", "order_number", "order_type", "payment_status", "status", "subtotal_paise"].sort()
+      ["cancel_reason", "created_at", "delivery_fee_paise", "discount_paise", "id", "net_total_paise", "notes", "order_number", "order_type", "payment_status", "status", "subtotal_paise"].sort()
     );
     console.log("[OK] DINE_IN order created, correct total, no internal fields leaked:", dineIn.body.order);
 
@@ -98,7 +99,7 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
     const takeaway = await request(app)
       .post("/api/public/orders")
       .set("Authorization", `Bearer ${token}`)
-      .send({ orderType: "TAKEAWAY", items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] });
+      .send({ orderType: "TAKEAWAY", customerName: "Test Customer", items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] });
     expect(takeaway.status).toBe(201);
     expect(takeaway.body.order.net_total_paise).toBe(25000);
     console.log("[OK] TAKEAWAY order created");
@@ -188,6 +189,7 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({
         orderType: "TAKEAWAY",
+        customerName: "Test Customer",
         idempotencyKey: idemKey,
         items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }],
       });
@@ -197,6 +199,7 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
       .set("Authorization", `Bearer ${token}`)
       .send({
         orderType: "TAKEAWAY",
+        customerName: "Test Customer",
         idempotencyKey: idemKey,
         items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }],
       });
@@ -210,11 +213,11 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
       request(app)
         .post("/api/public/orders")
         .set("Authorization", `Bearer ${token}`)
-        .send({ orderType: "TAKEAWAY", idempotencyKey: raceKey, items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] }),
+        .send({ orderType: "TAKEAWAY", customerName: "Test Customer", idempotencyKey: raceKey, items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] }),
       request(app)
         .post("/api/public/orders")
         .set("Authorization", `Bearer ${token}`)
-        .send({ orderType: "TAKEAWAY", idempotencyKey: raceKey, items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] }),
+        .send({ orderType: "TAKEAWAY", customerName: "Test Customer", idempotencyKey: raceKey, items: [{ menuItemId: itemId, priceType: "SINGLE", quantity: 1 }] }),
     ]);
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(201);

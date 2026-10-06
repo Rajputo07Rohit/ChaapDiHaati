@@ -14,6 +14,7 @@ const orderItemSchema = z.object({
   specialInstructions: z.string().optional(),
   discountType: z.enum(["FLAT", "PERCENTAGE"]).optional(),
   discountValue: z.number().min(0).optional(),
+  addonIds: z.array(z.string()).optional(),
 });
 
 const createOrderSchema = z.object({
@@ -81,6 +82,21 @@ ordersRouter.patch(
     const input = updateOrderSchema.parse(req.body);
     const order = await ordersService.updateOrderItems(req.params.id, { ...input, orderType: "DINE_IN" }, req.user!.id, req.user!.role);
     res.json({ order: await ordersService.getOrderFull(order.id) });
+  })
+);
+
+// Accepts a customer self-order (status PENDING_ACCEPTANCE) into the normal
+// kitchen pipeline. Denying reuses the existing /cancel endpoint below —
+// no separate refund is triggered automatically (see cancelOrder, which
+// already voids/reverses any pre-payment's ledger entry; an actual
+// gateway-side refund for online payments is a manual follow-up for staff).
+ordersRouter.post(
+  "/:id/accept",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const order = await ordersService.acceptOrder(req.params.id, req.user!.id);
+    res.json({ order });
   })
 );
 

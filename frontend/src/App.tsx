@@ -18,6 +18,8 @@ import { Reports } from "./pages/Reports";
 import { Staff } from "./pages/Staff";
 import { SettingsPage } from "./pages/Settings";
 import { Discounts } from "./pages/Discounts";
+import { PromoCodes } from "./pages/PromoCodes";
+import { Banners } from "./pages/Banners";
 import { AuditLog } from "./pages/AuditLog";
 import { LoginActivity } from "./pages/LoginActivity";
 import { RiderDashboard } from "./pages/RiderDashboard";
@@ -74,6 +76,8 @@ export default function App() {
         <Route path="/staff" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Staff /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
         <Route path="/discounts" element={<RequireAuth roles={["ADMIN"]}><Discounts /></RequireAuth>} />
+        <Route path="/promo-codes" element={<RequireAuth roles={["ADMIN"]}><PromoCodes /></RequireAuth>} />
+        <Route path="/banners" element={<RequireAuth roles={["ADMIN"]}><Banners /></RequireAuth>} />
         <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
         <Route path="/login-activity" element={<RequireAuth roles={["ADMIN"]} requireSuperAdmin><LoginActivity /></RequireAuth>} />
         <Route path="/" element={<RoleHome />} />

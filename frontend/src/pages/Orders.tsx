@@ -177,14 +177,27 @@ export function Orders() {
     enabled: canManage,
   });
 
+  // Picking a rider is the only step needed for a delivery order now — the
+  // backend also accepts (if still pending) and dispatches it in this same
+  // call, so it shows up on that rider's phone immediately.
   const assignRiderMutation = useMutation({
     mutationFn: (riderId: string) => api.post(`/orders/${detail!.order.id}/assign-rider`, { riderId }),
     onSuccess: () => {
-      toast.success("Rider assigned");
+      toast.success("Rider assigned — order sent out for delivery");
       queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not assign rider"),
+  });
+
+  const acceptMutation = useMutation({
+    mutationFn: (orderId: string) => api.post(`/orders/${orderId}/accept`, undefined),
+    onSuccess: () => {
+      toast.success("Order accepted");
+      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not accept order"),
   });
 
   const advanceStatusMutation = useMutation({
@@ -232,7 +245,7 @@ export function Orders() {
             )}
             <Select value={status} onChange={(e) => setStatus(e.target.value)}>
               <option value="">All statuses</option>
-              {["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "REFUNDED"].map((s) => (
+              {["DRAFT", "PENDING_ACCEPTANCE", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "COMPLETED", "CANCELLED", "REFUNDED"].map((s) => (
                 <option key={s} value={s}>
                   {s.replace(/_/g, " ")}
                 </option>
@@ -320,6 +333,18 @@ export function Orders() {
                   <td className="px-4 py-2.5 text-slate-500">{paymentModeLabel(o)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatPaise(o.net_total_paise)}</td>
                   <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
+                    {canManage && o.status === "PENDING_ACCEPTANCE" && (
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          acceptMutation.mutate(o.id);
+                        }}
+                        disabled={acceptMutation.isPending}
+                      >
+                        Accept
+                      </Button>
+                    )}
                     {canManage && o.order_type !== "DELIVERY" && ["CONFIRMED", "PREPARING", "READY"].includes(o.status) && (
                       <Button
                         size="sm"
@@ -332,7 +357,7 @@ export function Orders() {
                         Collect Payment
                       </Button>
                     )}
-                    {canManage && ["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"].includes(o.status) && (
+                    {canManage && ["DRAFT", "PENDING_ACCEPTANCE", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"].includes(o.status) && (
                       <Button
                         size="sm"
                         variant="danger"
@@ -341,7 +366,7 @@ export function Orders() {
                           setCancelTarget(o);
                         }}
                       >
-                        Cancel
+                        {o.status === "PENDING_ACCEPTANCE" ? "Deny" : "Cancel"}
                       </Button>
                     )}
                   </td>
@@ -393,6 +418,16 @@ export function Orders() {
                   >
                     Add More Items
                   </Button>
+                )}
+                {canManage && detail.order.status === "PENDING_ACCEPTANCE" && (
+                  <>
+                    <Button size="sm" onClick={() => acceptMutation.mutate(detail.order.id)} disabled={acceptMutation.isPending}>
+                      Accept Order
+                    </Button>
+                    <Button size="sm" variant="danger" onClick={() => setCancelTarget(detail.order)}>
+                      Deny
+                    </Button>
+                  </>
                 )}
                 {canManage && NEXT_STATUS[detail.order.status] && (
                   <Button size="sm" variant="secondary" onClick={() => advanceStatusMutation.mutate(NEXT_STATUS[detail.order.status])}>
@@ -483,6 +518,7 @@ export function Orders() {
                   value={detail.order.assigned_rider_id ?? ""}
                   onChange={(e) => e.target.value && assignRiderMutation.mutate(e.target.value)}
                   className="w-full"
+                  disabled={assignRiderMutation.isPending}
                 >
                   <option value="">{riderOptions?.riders.length ? "Assign a rider…" : "No riders set up yet"}</option>
                   {riderOptions?.riders.map((r) => (
@@ -491,10 +527,8 @@ export function Orders() {
                     </option>
                   ))}
                 </Select>
-                {detail.order.status === "READY" && detail.order.assigned_rider_id && (
-                  <Button size="sm" className="w-full mt-2" onClick={() => advanceStatusMutation.mutate("OUT_FOR_DELIVERY")}>
-                    Send for Delivery
-                  </Button>
+                {detail.order.assigned_rider_id && detail.order.status !== "OUT_FOR_DELIVERY" && (
+                  <p className="mt-1.5 text-xs text-blue-700">Rider assigned — this order is out for delivery.</p>
                 )}
               </div>
             )}
@@ -559,12 +593,19 @@ export function Orders() {
         )}
       </Modal>
 
-      <Modal open={!!cancelTarget} onClose={() => setCancelTarget(null)} title={`Cancel Order #${cancelTarget?.order_number}`}>
+      <Modal
+        open={!!cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        title={cancelTarget?.status === "PENDING_ACCEPTANCE" ? `Deny Order #${cancelTarget?.order_number}` : `Cancel Order #${cancelTarget?.order_number}`}
+      >
         <div className="space-y-3">
-          <p className="text-sm text-slate-500">A reason is required. Cancelled orders are never counted as sales.</p>
+          <p className="text-sm text-slate-500">
+            A reason is required. {cancelTarget?.status === "PENDING_ACCEPTANCE" ? "Denied" : "Cancelled"} orders are never counted as sales.
+            {cancelTarget?.payment_status === "PAID" && " Any amount already collected is reversed in the cash/bank ledger — process any gateway-side refund separately."}
+          </p>
           <Input placeholder="Reason" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} className="w-full" />
           <Button variant="danger" className="w-full" disabled={!cancelReason || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>
-            Confirm Cancellation
+            {cancelTarget?.status === "PENDING_ACCEPTANCE" ? "Confirm Denial" : "Confirm Cancellation"}
           </Button>
         </div>
       </Modal>

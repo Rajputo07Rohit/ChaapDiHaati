@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
+import path from "path";
 import { env } from "./config/env";
 import { apiRouter } from "./routes";
 import { errorHandler } from "./middleware/errorHandler";
@@ -47,6 +48,12 @@ const publicLimiter = rateLimit({
   message: { error: { message: "Too many requests. Please slow down.", code: "RATE_LIMITED" } },
 });
 app.use("/api/public", publicLimiter);
+
+// Admin-uploaded images (banner carousel, menu item photos). Note: on
+// Render's free tier this disk is ephemeral and wiped on every redeploy —
+// fine for local/dev testing, but production durability needs a real
+// object store (S3/Cloudinary) swapped in here before that matters.
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 

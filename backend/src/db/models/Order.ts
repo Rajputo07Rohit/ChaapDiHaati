@@ -4,6 +4,7 @@ import { PriceType } from "./Menu";
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
 export type OrderStatus =
   | "DRAFT"
+  | "PENDING_ACCEPTANCE"
   | "CONFIRMED"
   | "PREPARING"
   | "READY"
@@ -25,6 +26,15 @@ export type DiscountType = "FLAT" | "PERCENTAGE";
  */
 export type KitchenStatus = "PENDING" | "READY";
 
+/** A snapshot of a selected add-on (e.g. "Extra Cheese") at order time —
+ * independent of the MenuItem's current addons list, so editing/removing an
+ * addon later never changes what a past order shows it charged for. */
+export interface OrderItemAddonSub {
+  _id: string;
+  name: string;
+  unitPricePaise: number;
+}
+
 export interface OrderItemSub {
   _id: string;
   menuItemId: string;
@@ -42,6 +52,8 @@ export interface OrderItemSub {
   discountType: DiscountType;
   discountValue: number;
   lineNetPaise: number;
+  /** Selected add-ons (e.g. extra cream/cheese), charged per unit ordered. Empty for items with none selected. */
+  addons: OrderItemAddonSub[];
   createdAt: string;
 }
 
@@ -87,6 +99,8 @@ export interface OrderDoc {
   discountValue: number;
   itemDiscountTotalPaise: number;
   discountReason: string | null;
+  /** The promo code redeemed for this order's discount, if any (customer self-order only). Kept separately from discountReason so usage limits can be enforced by querying it directly. */
+  promoCode: string | null;
   /** Only ever non-zero for customer self-ordered DELIVERY (tiered by subtotal, computed server-side). Staff-created orders always default to 0. */
   deliveryFeePaise: number;
   netTotalPaise: number;
@@ -107,6 +121,12 @@ export interface OrderDoc {
   discounts: OrderDiscountSub[];
 }
 
+const itemAddonSchema = new Schema<OrderItemAddonSub>({
+  _id: { type: String },
+  name: { type: String, required: true },
+  unitPricePaise: { type: Number, required: true, min: 0 },
+});
+
 const itemSchema = new Schema<OrderItemSub>({
   _id: { type: String },
   menuItemId: { type: String, required: true, ref: "MenuItem" },
@@ -124,6 +144,7 @@ const itemSchema = new Schema<OrderItemSub>({
   discountType: { type: String, required: true, enum: ["FLAT", "PERCENTAGE"], default: "FLAT" },
   discountValue: { type: Number, required: true, default: 0 },
   lineNetPaise: { type: Number, required: true, default: 0 },
+  addons: { type: [itemAddonSchema], required: true, default: [] },
   createdAt: { type: String, required: true },
 });
 
@@ -156,7 +177,7 @@ const orderSchema = new Schema<OrderDoc>({
   status: {
     type: String,
     required: true,
-    enum: ["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED"],
+    enum: ["DRAFT", "PENDING_ACCEPTANCE", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY", "DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED"],
     default: "DRAFT",
   },
   paymentStatus: { type: String, required: true, enum: ["UNPAID", "PARTIAL", "PAID", "REFUNDED"], default: "UNPAID" },
@@ -174,6 +195,7 @@ const orderSchema = new Schema<OrderDoc>({
   itemDiscountTotalPaise: { type: Number, required: true, default: 0 },
   deliveryFeePaise: { type: Number, required: true, default: 0 },
   discountReason: { type: String, default: null },
+  promoCode: { type: String, default: null },
   netTotalPaise: { type: Number, required: true, default: 0 },
   cancelReason: { type: String, default: null },
   notes: { type: String, default: null },
@@ -199,6 +221,7 @@ orderSchema.index({ status: 1 });
 orderSchema.index({ assignedRiderId: 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ clientIdempotencyKey: 1 }, { unique: true, sparse: true });
+orderSchema.index({ promoCode: 1, customerPhone: 1 });
 
 export const Order = model<OrderDoc>("Order", orderSchema);
 

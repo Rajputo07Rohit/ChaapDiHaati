@@ -17,6 +17,8 @@ import {
   Settings as SettingsIcon,
   History,
   Percent,
+  Tag,
+  Image as ImageIcon,
   ChefHat,
   ShieldCheck,
   Menu as MenuIcon,
@@ -28,6 +30,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Role } from "../api/types";
+import { PendingOrdersPopup } from "./PendingOrdersPopup";
 import { AppTheme, applyTheme, getStoredTheme } from "../utils/theme";
 import logo from "../assets/logo.png";
 
@@ -55,6 +58,8 @@ const NAV: NavItem[] = [
   { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["ADMIN", "MANAGER"] },
   { to: "/staff", label: "Staff", icon: Users, roles: ["ADMIN", "MANAGER"] },
   { to: "/discounts", label: "Discounts", icon: Percent, roles: ["ADMIN"] },
+  { to: "/promo-codes", label: "Promo Codes", icon: Tag, roles: ["ADMIN"] },
+  { to: "/banners", label: "Banners", icon: ImageIcon, roles: ["ADMIN"] },
   { to: "/settings", label: "Settings", icon: SettingsIcon, roles: ["ADMIN"] },
   { to: "/audit-log", label: "Audit Log", icon: History, roles: ["ADMIN"] },
   { to: "/login-activity", label: "Login Activity", icon: ShieldCheck, roles: ["ADMIN"], superAdminOnly: true },
@@ -172,6 +177,8 @@ export function Layout() {
           <Outlet />
         </div>
       </main>
+
+      <PendingOrdersPopup />
     </div>
   );
 }

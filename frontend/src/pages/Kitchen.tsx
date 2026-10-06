@@ -215,9 +215,12 @@ export function Kitchen() {
   // Every order gets kitchen tracking regardless of type/status — a
   // counter sale is typically already COMPLETED by the time it reaches
   // here, so this can't filter on order status at all, only on whether
-  // the kitchen itself has marked it ready yet.
+  // the kitchen itself has marked it ready yet. PENDING_ACCEPTANCE is the
+  // one exception: a customer self-order staff hasn't accepted/denied yet
+  // must never reach the kitchen board, or cooking could start on an order
+  // that gets denied a moment later.
   const filtered = (data?.orders ?? [])
-    .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED")
+    .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED" && o.status !== "PENDING_ACCEPTANCE")
     .filter((o) => showReady || o.kitchen_status === "PENDING");
 
   // Dine-in and takeaway are cooked-and-served-on-the-spot; delivery

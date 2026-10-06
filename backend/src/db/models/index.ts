@@ -18,3 +18,5 @@ export * from "./HistoricalItemSale";
 export * from "./Discount";
 export * from "./LoginEvent";
 export * from "./Session";
+export * from "./PromoCode";
+export * from "./Banner";

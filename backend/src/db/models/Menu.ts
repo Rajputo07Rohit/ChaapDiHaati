@@ -18,6 +18,17 @@ export const MenuCategory = model<MenuCategoryDoc>("MenuCategory", categorySchem
 
 export type MenuItemStatus = "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
 
+/** A configurable paid extra (e.g. "Extra Cream", "Extra Cheese") a
+ * customer/staff can add to this item at order time. Editing or removing
+ * one here never touches past orders — resolveOrderItems snapshots the
+ * name/price onto the order item itself (see OrderItemAddonSub). */
+export interface MenuItemAddonDoc {
+  _id: string;
+  name: string;
+  pricePaise: number;
+  active: boolean;
+}
+
 export interface MenuItemDoc {
   _id: string;
   categoryId: string;
@@ -30,8 +41,18 @@ export interface MenuItemDoc {
   fullLabel: string;
   status: MenuItemStatus;
   sortOrder: number;
+  addons: MenuItemAddonDoc[];
+  /** Dish photo shown on the customer app's menu card. Null until an admin sets one. */
+  imageUrl: string | null;
   createdAt: string;
 }
+
+const addonSchema = new Schema<MenuItemAddonDoc>({
+  _id: { type: String },
+  name: { type: String, required: true },
+  pricePaise: { type: Number, required: true, min: 0 },
+  active: { type: Boolean, required: true, default: true },
+});
 
 const itemSchema = new Schema<MenuItemDoc>({
   _id: { type: String },
@@ -45,6 +66,8 @@ const itemSchema = new Schema<MenuItemDoc>({
   fullLabel: { type: String, required: true, default: "Full" },
   status: { type: String, required: true, enum: ["ACTIVE", "UNAVAILABLE", "DISCONTINUED"], default: "ACTIVE" },
   sortOrder: { type: Number, required: true, default: 0 },
+  addons: { type: [addonSchema], required: true, default: [] },
+  imageUrl: { type: String, default: null },
   createdAt: { type: String, required: true },
 });
 itemSchema.index({ categoryId: 1 });

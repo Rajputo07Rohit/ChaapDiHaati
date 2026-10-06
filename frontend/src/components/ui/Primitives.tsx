@@ -147,6 +147,7 @@ export function StockBadge({ status }: { status: string }) {
 export function OrderStatusBadge({ status }: { status: string }) {
   const map: Record<string, "default" | "green" | "red" | "yellow" | "blue" | "gray"> = {
     DRAFT: "gray",
+    PENDING_ACCEPTANCE: "yellow",
     CONFIRMED: "blue",
     PREPARING: "yellow",
     READY: "yellow",

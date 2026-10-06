@@ -28,9 +28,12 @@ export interface CreateCustomerOrderInput {
   notes?: string;
   /** Client-generated key so a retried/duplicated submit returns the existing order instead of creating another. */
   idempotencyKey?: string;
+  /** Re-validated server-side against this exact order (subtotal, phone, expiry, usage limits) — never trusted as already-applied. */
+  promoCode?: string;
 }
 
 export interface CreateRazorpayOrderInput {
   orderType: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
   items: OrderItemInput[];
+  promoCode?: string;
 }

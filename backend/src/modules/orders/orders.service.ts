@@ -18,7 +18,7 @@ import { CompleteOrderInput, CreateOrderInput, DiscountType, OrderItemInput, Ord
 
 const EDITABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY"];
 const COMPLETABLE_STATUSES: OrderStatus[] = ["CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
-const CANCELLABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
+const CANCELLABLE_STATUSES: OrderStatus[] = ["DRAFT", "PENDING_ACCEPTANCE", "CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
 
 /** Single-step forward-only stages a staff member can push an order through by hand. */
 const STATUS_ADVANCE_MAP: Record<string, OrderStatus> = {
@@ -113,6 +113,7 @@ function toItemRow(item: OrderItemSub) {
     discount_type: item.discountType,
     discount_value: item.discountValue,
     line_net_paise: item.lineNetPaise,
+    addons: (item.addons ?? []).map((a) => ({ id: a._id, name: a.name, unit_price_paise: a.unitPricePaise })),
   };
 }
 
@@ -191,6 +192,12 @@ export async function listOrders(
   }));
 }
 
+interface ResolvedOrderItemAddon {
+  id: string;
+  name: string;
+  unitPricePaise: number;
+}
+
 interface ResolvedOrderItem {
   menuItemId: string;
   itemName: string;
@@ -204,6 +211,7 @@ interface ResolvedOrderItem {
   lineSubtotalPaise: number;
   itemDiscountPaise: number;
   lineNetPaise: number;
+  addons: ResolvedOrderItemAddon[];
 }
 
 /** Resolves a FLAT (paise) or PERCENTAGE (0-100) discount against a base amount, with validation. */
@@ -235,7 +243,17 @@ export async function resolveOrderItems(items: OrderItemInput[]): Promise<Resolv
         throw new ValidationError(`${menuItem.name} has no price configured for ${item.priceType}.`);
       }
 
-      const lineSubtotalPaise = price * item.quantity;
+      const addons: ResolvedOrderItemAddon[] = [];
+      for (const addonId of item.addonIds ?? []) {
+        const addon = menuItem.addons.find((a) => a.id === addonId);
+        if (!addon || !addon.active) {
+          throw new ValidationError(`That add-on isn't available for ${menuItem.name} anymore.`);
+        }
+        addons.push({ id: addon.id, name: addon.name, unitPricePaise: addon.price_paise });
+      }
+      const addonsUnitTotalPaise = addons.reduce((s, a) => s + a.unitPricePaise, 0);
+
+      const lineSubtotalPaise = (price + addonsUnitTotalPaise) * item.quantity;
       const discountType = item.discountType ?? "FLAT";
       const discountValue = item.discountValue ?? 0;
       const itemDiscountPaise = discountValue > 0 ? resolveDiscountAmount(lineSubtotalPaise, discountType, discountValue, menuItem.name) : 0;
@@ -250,6 +268,7 @@ export async function resolveOrderItems(items: OrderItemInput[]): Promise<Resolv
         unitPricePaise: price,
         quantity: item.quantity,
         specialInstructions: item.specialInstructions ?? null,
+        addons,
         discountType,
         discountValue,
         lineSubtotalPaise,
@@ -298,6 +317,7 @@ export function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, d
       discountType: item.discountType,
       discountValue: item.discountValue,
       lineNetPaise: item.lineNetPaise,
+      addons: item.addons.map((a) => ({ _id: newId("itemaddon"), name: a.name, unitPricePaise: a.unitPricePaise })),
       createdAt: now,
     } as OrderItemSub);
 
@@ -594,6 +614,37 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
       },
       session
     );
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * Staff/admin accepting a customer self-order (placed via the QR/online
+ * flow) into the normal kitchen pipeline. The counterpart to cancelOrder
+ * being used as "Deny" — accept just flips PENDING_ACCEPTANCE -> CONFIRMED,
+ * same status a staff-created order starts at, so every downstream step
+ * (kitchen, rider assignment, completion) behaves identically either way.
+ */
+export async function acceptOrder(orderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.status !== "PENDING_ACCEPTANCE") {
+    throw new ConflictError(`Cannot accept an order that is ${order.status.toLowerCase()}.`);
+  }
+
+  order.status = "CONFIRMED";
+  order.confirmedAt = nowIso();
+  order.updatedAt = nowIso();
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "ORDER_ACCEPTED",
+    entityType: "sales_order",
+    entityId: orderId,
+    oldValue: { status: "PENDING_ACCEPTANCE" },
+    newValue: { status: "CONFIRMED" },
   });
 
   return getOrderOrThrow(orderId);
@@ -1091,6 +1142,14 @@ export async function listRiders() {
   return docs.map((u) => ({ id: u._id, username: u.username, fullName: u.fullName }));
 }
 
+/**
+ * Picking a rider is the one action staff should need for a delivery order
+ * — this also accepts it (if it was still PENDING_ACCEPTANCE) and dispatches
+ * it (status -> OUT_FOR_DELIVERY) in the same click, instead of separate
+ * Accept / Mark PREPARING / Mark READY / Send for Delivery steps. Kitchen
+ * prep tracking is unaffected — kitchenStatus is a wholly separate flag
+ * (see markKitchenReady) the kitchen board filters on, not order status.
+ */
 export async function assignRider(orderId: string, riderId: string, userId: string): Promise<OrderRow> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
@@ -1104,7 +1163,10 @@ export async function assignRider(orderId: string, riderId: string, userId: stri
   if (!rider) throw new ValidationError("That user is not an active rider.");
 
   const oldRiderId = order.assignedRiderId;
+  const oldStatus = order.status;
   order.assignedRiderId = riderId;
+  if (order.status === "PENDING_ACCEPTANCE") order.confirmedAt = nowIso();
+  if (order.status !== "OUT_FOR_DELIVERY") order.status = "OUT_FOR_DELIVERY";
   order.updatedAt = nowIso();
   await order.save();
 
@@ -1113,8 +1175,8 @@ export async function assignRider(orderId: string, riderId: string, userId: stri
     action: "RIDER_ASSIGNED",
     entityType: "sales_order",
     entityId: orderId,
-    oldValue: { assignedRiderId: oldRiderId },
-    newValue: { assignedRiderId: riderId },
+    oldValue: { assignedRiderId: oldRiderId, status: oldStatus },
+    newValue: { assignedRiderId: riderId, status: order.status },
   });
 
   return getOrderOrThrow(orderId);

@@ -1,6 +1,7 @@
 export type OrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY" | "ONLINE";
 export type OrderStatus =
   | "DRAFT"
+  | "PENDING_ACCEPTANCE"
   | "CONFIRMED"
   | "PREPARING"
   | "READY"
@@ -21,6 +22,8 @@ export interface OrderItemInput {
   /** Per-item discount. FLAT is paise; PERCENTAGE is 0-100. Defaults to no discount. */
   discountType?: DiscountType;
   discountValue?: number;
+  /** IDs of this item's selected add-ons (e.g. "Extra Cheese") — must be active add-ons configured on the menu item. Each applies per unit ordered. */
+  addonIds?: string[];
 }
 
 export interface CreateOrderInput {

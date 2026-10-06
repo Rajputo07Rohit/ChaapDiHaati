@@ -4,6 +4,7 @@ dist/
 customer/
 backend/data/
 !backend/data/.gitkeep
+backend/uploads/
 backups/
 .env
 .env.local
