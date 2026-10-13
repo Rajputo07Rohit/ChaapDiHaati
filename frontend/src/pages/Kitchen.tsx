@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike, User } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PageHeader } from "../components/ui/Primitives";
@@ -91,6 +91,12 @@ function OrderTicket({ order }: { order: SalesOrder }) {
           </span>
           <span className="text-xs text-slate-400 tabular-nums">{formatTime(order.created_at)}</span>
         </div>
+        {order.customer_name?.trim() && (
+          <div className="flex items-center gap-1.5 text-sm font-bold text-slate-900">
+            <User size={14} className="text-slate-500 shrink-0" />
+            {order.customer_name}
+          </div>
+        )}
         {order.order_type === "DELIVERY" && order.delivery_address?.trim() && (
           <div className="flex items-start gap-1.5 text-sm text-slate-700">
             <MapPin size={14} className="text-orange-500 shrink-0 mt-0.5" />
@@ -105,12 +111,21 @@ function OrderTicket({ order }: { order: SalesOrder }) {
             <div>
               <span className="text-base font-bold text-slate-900">{item.item_name_snapshot}</span>
               {item.price_type !== "SINGLE" && <span className="text-sm text-slate-500"> ({item.price_type})</span>}
+              {(item.addons ?? []).length > 0 && (
+                <div className="text-sm text-slate-600">+ {item.addons.map((a) => a.name).join(", ")}</div>
+              )}
               {item.special_instructions && <div className="text-sm text-amber-700 font-medium">Note: {item.special_instructions}</div>}
             </div>
             <span className="text-lg font-extrabold text-brand-600 tabular-nums shrink-0">×{item.quantity}</span>
           </div>
         ))}
       </div>
+
+      {order.notes?.trim() && (
+        <div className="mx-4 mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
+          Special instructions: {order.notes}
+        </div>
+      )}
 
       {ready ? (
         <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-base py-3.5">
