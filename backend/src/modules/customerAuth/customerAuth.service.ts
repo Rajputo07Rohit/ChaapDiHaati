@@ -22,7 +22,7 @@ function requireApiKey(): string {
 // The approved DLT template registered in the 2Factor dashboard
 // (SMS OTP > OTP Templates) — without naming it, 2Factor has no approved
 // SMS template to send and silently falls back to a voice call instead.
-const OTP_TEMPLATE_NAME = "CDHOtp";
+const OTP_TEMPLATE_NAME = "OTP1";
 
 /** Sends an OTP via 2Factor.in and returns the session id needed to verify it. */
 export async function sendOtp(phone: string): Promise<string> {
