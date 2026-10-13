@@ -30,6 +30,8 @@ function toCustomerOrderResponse(order: OrderRow) {
     cancel_reason: order.status === "CANCELLED" || order.status === "REFUNDED" ? order.cancel_reason : null,
     notes: null,
     created_at: order.created_at,
+    confirmed_at: order.confirmed_at,
+    prep_time_minutes: order.prep_time_minutes,
   };
 }
 

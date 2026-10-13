@@ -111,6 +111,8 @@ export interface OrderDoc {
   clientIdempotencyKey: string | null;
   createdBy: string | null;
   confirmedAt: string | null;
+  /** Prep-time estimate (minutes) chosen by staff when accepting a self-order; drives the customer's ETA. */
+  prepTimeMinutes: number | null;
   deliveredAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
@@ -207,6 +209,7 @@ const orderSchema = new Schema<OrderDoc>({
   clientIdempotencyKey: { type: String },
   createdBy: { type: String, default: null, ref: "User" },
   confirmedAt: { type: String, default: null },
+  prepTimeMinutes: { type: Number, default: null },
   deliveredAt: { type: String, default: null },
   completedAt: { type: String, default: null },
   cancelledAt: { type: String, default: null },

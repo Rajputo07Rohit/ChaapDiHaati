@@ -53,6 +53,7 @@ export interface OrderRow {
   notes: string | null;
   created_by: string | null;
   confirmed_at: string | null;
+  prep_time_minutes: number | null;
   delivered_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
@@ -87,6 +88,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     notes: doc.notes,
     created_by: doc.createdBy,
     confirmed_at: doc.confirmedAt,
+    prep_time_minutes: doc.prepTimeMinutes ?? null,
     delivered_at: doc.deliveredAt,
     completed_at: doc.completedAt,
     cancelled_at: doc.cancelledAt,
@@ -626,7 +628,7 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
  * same status a staff-created order starts at, so every downstream step
  * (kitchen, rider assignment, completion) behaves identically either way.
  */
-export async function acceptOrder(orderId: string, userId: string): Promise<OrderRow> {
+export async function acceptOrder(orderId: string, userId: string, prepTimeMinutes?: number): Promise<OrderRow> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
   if (order.status !== "PENDING_ACCEPTANCE") {
@@ -635,6 +637,7 @@ export async function acceptOrder(orderId: string, userId: string): Promise<Orde
 
   order.status = "CONFIRMED";
   order.confirmedAt = nowIso();
+  if (prepTimeMinutes) order.prepTimeMinutes = prepTimeMinutes;
   order.updatedAt = nowIso();
   await order.save();
 
@@ -648,6 +651,26 @@ export async function acceptOrder(orderId: string, userId: string): Promise<Orde
   });
 
   return getOrderOrThrow(orderId);
+}
+
+/**
+ * Auto-cancels customer self-orders that staff never accepted or denied
+ * within `maxAgeMinutes`, so a customer is never left waiting indefinitely.
+ * Reuses cancelOrder (so any collected payment is reversed in the ledger).
+ */
+export async function expireStalePendingOrders(maxAgeMinutes: number): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
+  const stale = await Order.find({ status: "PENDING_ACCEPTANCE", createdAt: { $lt: cutoff } });
+  let expired = 0;
+  for (const o of stale) {
+    try {
+      await cancelOrder(o._id, "Restaurant did not respond in time. Please try again.", null as unknown as string, "ADMIN");
+      expired++;
+    } catch (err) {
+      console.error(`Failed to auto-cancel stale order ${o._id}:`, err);
+    }
+  }
+  return expired;
 }
 
 /** Posts each payment to the cash or bank ledger and pushes it onto the

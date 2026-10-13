@@ -95,7 +95,8 @@ ordersRouter.post(
   requireAuth,
   isAnyRole,
   asyncHandler(async (req, res) => {
-    const order = await ordersService.acceptOrder(req.params.id, req.user!.id);
+    const { prepTimeMinutes } = z.object({ prepTimeMinutes: z.number().int().min(1).max(240).optional() }).parse(req.body ?? {});
+    const order = await ordersService.acceptOrder(req.params.id, req.user!.id, prepTimeMinutes);
     res.json({ order });
   })
 );
