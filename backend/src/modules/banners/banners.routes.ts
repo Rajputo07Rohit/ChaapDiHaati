@@ -1,22 +1,14 @@
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { isAdmin } from "../../middleware/rbac";
 import { ValidationError } from "../../utils/errors";
-import { newId } from "../../utils/ids";
+import { BannerImage } from "../../db/models";
 import * as bannersService from "./banners.service";
 
-export const UPLOADS_DIR = path.join(process.cwd(), "uploads", "banners");
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-  filename: (_req, file, cb) => cb(null, `${newId("banner")}${path.extname(file.originalname).toLowerCase()}`),
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
@@ -47,8 +39,12 @@ bannersAdminRouter.post(
     if (!req.file) throw new ValidationError("An image file is required.");
     const bodySchema = z.object({ title: z.string().optional(), linkUrl: z.string().optional() });
     const input = bodySchema.parse(req.body);
-    const imageUrl = `/uploads/banners/${req.file.filename}`;
-    const banner = await bannersService.createBanner({ imageUrl, title: input.title, linkUrl: input.linkUrl, userId: req.user!.id });
+    const banner = await bannersService.createBanner({
+      image: { contentType: req.file.mimetype, data: req.file.buffer },
+      title: input.title,
+      linkUrl: input.linkUrl,
+      userId: req.user!.id,
+    });
     res.status(201).json({ banner });
   })
 );
@@ -88,5 +84,17 @@ bannersPublicRouter.get(
   "/active",
   asyncHandler(async (_req, res) => {
     res.json({ banners: await bannersService.listActiveBannersForCustomer() });
+  })
+);
+
+// Public on purpose: it's just the banner picture, referenced by <img src>.
+bannersPublicRouter.get(
+  "/image/:id",
+  asyncHandler(async (req, res) => {
+    const img = await BannerImage.findById(req.params.id);
+    if (!img) return res.status(404).end();
+    res.set("Content-Type", img.contentType);
+    res.set("Cache-Control", "public, max-age=86400");
+    res.send(img.data);
   })
 );

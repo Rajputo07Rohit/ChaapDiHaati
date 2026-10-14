@@ -7,8 +7,10 @@ import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
-import { Button, Card, EmptyState, Input, KitchenStatusBadge, Modal, OrderStatusBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
+import { Button, Card, EmptyState, Input, KitchenStatusBadge, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
+import { customerNoteOf } from "../components/PaymentModeBanner";
+import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
 import { InventoryMissingDialog } from "../components/InventoryMissingDialog";
 import { useAuth } from "../context/AuthContext";
 import { defaultPaymentMethodId } from "../utils/paymentDefaults";
@@ -114,10 +116,17 @@ export function Orders() {
     refetchInterval: 8_000,
   });
 
+  const [cancelNotice, setCancelNotice] = useState<CancelNotice | null>(null);
+
   const cancelMutation = useMutation({
     mutationFn: () => api.post(`/orders/${cancelTarget!.id}/cancel`, { reason: cancelReason }),
     onSuccess: () => {
       toast.success("Order cancelled");
+      // Offer the WhatsApp heads-up only when there's a customer to tell —
+      // walk-in dine-in orders usually have no number.
+      if (cancelTarget?.customer_phone) {
+        setCancelNotice({ order: cancelTarget, reason: cancelReason, wasDenied: cancelTarget.status === "PENDING_ACCEPTANCE" });
+      }
       setCancelTarget(null);
       setCancelReason("");
       queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -310,7 +319,7 @@ export function Orders() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {ordersByDate.map(([date, dateOrders]) => (
+              {ordersByDate.map(([date, dateOrders], dayIndex) => (
                 <Fragment key={date}>
                   <tr key={`hdr-${date}`}>
                     <td colSpan={10} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
@@ -320,6 +329,7 @@ export function Orders() {
                           {toDdMmYyyy(date)}
                           <span className="font-normal text-slate-300">
                             · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
+                            {hasNextPage && dayIndex === ordersByDate.length - 1 ? " so far (scroll for more)" : ""}
                           </span>
                         </div>
                         <span className="tabular-nums">
@@ -331,7 +341,7 @@ export function Orders() {
                     </td>
                   </tr>
                   {dateOrders.map((o) => (
-                <tr key={o.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => setSelected(o)}>
+                <tr key={o.id} className={`hover:bg-slate-50 cursor-pointer border-l-4 ${ORDER_TYPE_STYLE[o.order_type]?.stripe ?? "border-l-transparent"}`} onClick={() => setSelected(o)}>
                   <td className="px-4 py-2.5 font-medium">#{o.order_number}</td>
                   <td className="px-4 py-2.5">
                     {o.customer_name || o.customer_phone ? (
@@ -344,7 +354,7 @@ export function Orders() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-slate-500 tabular-nums">{toDdMmYyyy(o.business_date)}</td>
-                  <td className="px-4 py-2.5 text-slate-500">{o.order_type.replace("_", "-")}</td>
+                  <td className="px-4 py-2.5"><OrderTypeBadge type={o.order_type} /></td>
                   <td className="px-4 py-2.5">
                     <OrderStatusBadge status={o.status} />
                   </td>
@@ -623,7 +633,7 @@ export function Orders() {
             {detail.order.cancel_reason && (
               <div className="bg-rose-50 text-rose-700 rounded p-2 text-xs">Cancelled: {detail.order.cancel_reason}</div>
             )}
-            {detail.order.notes && <div className="text-xs text-slate-400">Note: {detail.order.notes}</div>}
+            {customerNoteOf(detail.order.notes) && <div className="text-xs text-slate-400">Note: {customerNoteOf(detail.order.notes)}</div>}
           </div>
         )}
       </Modal>
@@ -769,6 +779,7 @@ export function Orders() {
       </Modal>
 
       <ShareBillModal order={sharing} onClose={() => setSharing(null)} />
+      <CancelNotifyModal notice={cancelNotice} onClose={() => setCancelNotice(null)} />
     </div>
   );
 }

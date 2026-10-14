@@ -25,3 +25,20 @@ const bannerSchema = new Schema<BannerDoc>({
 bannerSchema.index({ active: 1, sortOrder: 1 });
 
 export const Banner = model<BannerDoc>("Banner", bannerSchema);
+
+/** Banner image bytes, stored in MongoDB rather than on disk — the hosting
+ * disk is wiped on every restart/redeploy, which silently broke uploaded
+ * banners (the row survived, the file didn't). */
+export interface BannerImageDoc {
+  _id: string; // same id as the Banner it belongs to
+  contentType: string;
+  data: Buffer;
+}
+
+const bannerImageSchema = new Schema<BannerImageDoc>({
+  _id: { type: String },
+  contentType: { type: String, required: true },
+  data: { type: Buffer, required: true },
+});
+
+export const BannerImage = model<BannerImageDoc>("BannerImage", bannerImageSchema);

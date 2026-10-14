@@ -4,7 +4,8 @@ import toast from "react-hot-toast";
 import { ChefHat, Clock, MapPin, Package, Phone, Truck, User } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
-import { Button, PageHeader, Select } from "../components/ui/Primitives";
+import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
+import { Button, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
 import { formatPaise } from "../utils/money";
 
 function minutesAgo(iso: string): number {
@@ -19,18 +20,18 @@ function useClockTick() {
   }, []);
 }
 
-function PackingCard({ order, riders }: { order: SalesOrder; riders: { id: string; fullName: string }[] }) {
+function PackingCard({ order }: { order: SalesOrder }) {
   const queryClient = useQueryClient();
-  const [riderId, setRiderId] = useState("");
   const cooked = order.kitchen_status === "READY";
   const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
   const age = minutesAgo(order.created_at);
 
-  // Packed + rider chosen = out for delivery. The rider sees it on their phone immediately.
+  // Packed = out for delivery. The server picks the rider with the fewest
+  // open deliveries and the order shows up on their phone immediately.
   const dispatch = useMutation({
-    mutationFn: () => api.post(`/orders/${order.id}/assign-rider`, { riderId }),
-    onSuccess: () => {
-      toast.success(`Order #${order.order_number} packed and sent out for delivery`);
+    mutationFn: () => api.post<{ riderName: string | null }>(`/orders/${order.id}/assign-rider`, {}),
+    onSuccess: (res) => {
+      toast.success(`Order #${order.order_number} sent to ${res.riderName ?? "a rider"}`);
       queryClient.invalidateQueries({ queryKey: ["packing-orders"] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
@@ -44,7 +45,7 @@ function PackingCard({ order, riders }: { order: SalesOrder; riders: { id: strin
       }`}
     >
       <div className={`flex items-center justify-between px-4 py-3 ${cooked ? "bg-emerald-50" : "bg-slate-50"}`}>
-        <span className="text-xl font-extrabold text-slate-900">#{order.order_number}</span>
+        <span className="flex items-center gap-2 text-xl font-extrabold text-slate-900">#{order.order_number} <OrderTypeBadge type={order.order_type} /> <PaymentModeBanner order={order} /></span>
         <span
           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
             cooked ? "bg-emerald-600 text-white" : "bg-amber-100 text-amber-700"
@@ -102,9 +103,9 @@ function PackingCard({ order, riders }: { order: SalesOrder; riders: { id: strin
             <span className="text-lg font-extrabold text-brand-600 tabular-nums shrink-0">×{item.quantity}</span>
           </div>
         ))}
-        {order.notes?.trim() && (
+        {customerNoteOf(order.notes) && (
           <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
-            Special instructions: {order.notes}
+            Special instructions: {customerNoteOf(order.notes)}
           </div>
         )}
       </div>
@@ -113,22 +114,9 @@ function PackingCard({ order, riders }: { order: SalesOrder; riders: { id: strin
         {!cooked ? (
           <div className="text-center text-sm font-medium text-slate-500 py-1.5">Waiting for the kitchen to mark this ready.</div>
         ) : (
-          <>
-            <div className="flex items-center gap-1.5">
-              <Truck size={14} className="shrink-0 text-blue-600" />
-              <Select value={riderId} onChange={(e) => setRiderId(e.target.value)} disabled={dispatch.isPending} className="flex-1">
-                <option value="">{riders.length ? "Select rider…" : "No riders set up yet"}</option>
-                {riders.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.fullName}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <Button className="w-full" disabled={!riderId || dispatch.isPending} onClick={() => dispatch.mutate()}>
-              {dispatch.isPending ? "Sending…" : "Packed — Send out for delivery"}
-            </Button>
-          </>
+          <Button className="w-full" disabled={dispatch.isPending} onClick={() => dispatch.mutate()}>
+            <Truck size={16} /> {dispatch.isPending ? "Sending…" : "Packed — Send to rider"}
+          </Button>
         )}
       </div>
     </div>
@@ -142,10 +130,6 @@ export function Packing() {
     queryFn: () => api.get<{ orders: SalesOrder[] }>("/orders?limit=300"),
     refetchInterval: 10_000,
   });
-  const { data: riderData } = useQuery({
-    queryKey: ["rider-options"],
-    queryFn: () => api.get<{ riders: { id: string; fullName: string }[] }>("/orders/rider/options"),
-  });
 
   // Delivery orders that staff accepted but that haven't left the shop yet.
   const waiting = (data?.orders ?? [])
@@ -153,13 +137,12 @@ export function Packing() {
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   const readyToPack = waiting.filter((o) => o.kitchen_status === "READY");
   const inKitchen = waiting.filter((o) => o.kitchen_status !== "READY");
-  const riders = riderData?.riders ?? [];
 
   return (
     <div>
       <PageHeader
         title="Packing"
-        description="Delivery orders cooked by the kitchen. Pack them, pick a rider and send them out."
+        description="Delivery orders cooked by the kitchen. Pack them and tap once — the order goes straight to the least-busy rider."
         actions={
           <span className="text-sm font-semibold text-slate-600">
             {readyToPack.length} ready to pack · {inKitchen.length} still in kitchen
@@ -175,7 +158,7 @@ export function Packing() {
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
         {[...readyToPack, ...inKitchen].map((o) => (
-          <PackingCard key={o.id} order={o} riders={riders} />
+          <PackingCard key={o.id} order={o} />
         ))}
       </div>
     </div>

@@ -54,6 +54,6 @@ storeStatusPublicRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
     const s = await storeStatusService.getStoreStatus();
-    res.json({ isOpen: s.isOpen, message: s.message, opensAt: s.opensAt, openTime: s.openTime, closeTime: s.closeTime, mode: s.mode });
+    res.json({ isOpen: s.isOpen, message: s.message, opensAt: s.opensAt, openTime: s.openTime, closeTime: s.closeTime, mode: s.mode, changesInSeconds: s.changesInSeconds });
   })
 );

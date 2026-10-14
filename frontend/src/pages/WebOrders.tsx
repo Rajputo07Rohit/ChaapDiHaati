@@ -4,18 +4,14 @@ import toast from "react-hot-toast";
 import { Clock, Globe, MapPin, Phone, User } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
-import { Button, Input, PageHeader } from "../components/ui/Primitives";
+import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
+import { Button, Input, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
 import { PENDING_WEB_ORDERS_KEY, usePendingWebOrders } from "../components/WebOrderNotifier";
+import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
 import { formatPaise } from "../utils/money";
 
 const PREP_OPTIONS = [15, 25, 40, 60];
-
-const ORDER_TYPE_LABEL: Record<string, string> = {
-  DINE_IN: "Dine-in",
-  TAKEAWAY: "Takeaway",
-  DELIVERY: "Delivery",
-  ONLINE: "Online",
-};
+const DEFAULT_PREP = 25;
 
 function useNow(intervalMs = 1000) {
   const [now, setNow] = useState(Date.now());
@@ -34,11 +30,15 @@ function waitingLabel(createdAt: string, now: number) {
 function WebOrderCard({
   order,
   prepMinutes,
+  onPrepChange,
   now,
+  onDenied,
 }: {
   order: SalesOrder;
   prepMinutes: number;
+  onPrepChange: (minutes: number) => void;
   now: number;
+  onDenied: (notice: CancelNotice) => void;
 }) {
   const queryClient = useQueryClient();
   const [denying, setDenying] = useState(false);
@@ -61,7 +61,11 @@ function WebOrderCard({
   });
   const deny = useMutation({
     mutationFn: () => api.post(`/orders/${order.id}/cancel`, { reason }),
-    onSuccess: () => done(`Order #${order.order_number} denied`),
+    onSuccess: () => {
+      done(`Order #${order.order_number} denied`);
+      // Lifted to the page: this card unmounts as soon as the order leaves the pending list.
+      if (order.customer_phone) onDenied({ order, reason, wasDenied: true });
+    },
     onError: fail("Could not deny order"),
   });
   const busy = accept.isPending || deny.isPending;
@@ -83,8 +87,9 @@ function WebOrderCard({
 
       <div className="px-4 py-2 border-b border-slate-100 space-y-1.5">
         <div className="flex items-center justify-between">
-          <span className="inline-block px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-teal-100 text-teal-700">
-            Web · {ORDER_TYPE_LABEL[order.order_type] ?? order.order_type}
+          <span className="flex items-center gap-1.5">
+            <OrderTypeBadge type={order.order_type} prefix="Web · " />
+            <PaymentModeBanner order={order} />
           </span>
           <span className="text-sm font-bold tabular-nums">{formatPaise(order.net_total_paise)}</span>
         </div>
@@ -122,15 +127,31 @@ function WebOrderCard({
         ))}
       </div>
 
-      {order.notes?.trim() && (
+      {customerNoteOf(order.notes) && (
         <div className="mx-4 mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
-          Special instructions: {order.notes}
+          Special instructions: {customerNoteOf(order.notes)}
         </div>
       )}
 
       <div className="p-3 border-t border-slate-100 space-y-2">
         {!denying ? (
           <>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs font-semibold text-slate-500">Ready in:</span>
+              {PREP_OPTIONS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPrepChange(m)}
+                  className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold transition ${
+                    prepMinutes === m ? "bg-brand-600 text-white border-brand-600" : "border-slate-300 text-slate-700 hover:border-slate-400"
+                  }`}
+                >
+                  {m} min
+                </button>
+              ))}
+            </div>
             <div className="flex gap-2">
               <Button className="flex-1" disabled={busy} onClick={() => accept.mutate()}>
                 {accept.isPending ? "Accepting…" : "Accept → Kitchen"}
@@ -161,13 +182,16 @@ function WebOrderCard({
 export function WebOrders() {
   const queryClient = useQueryClient();
   const now = useNow();
-  const [prepMinutes, setPrepMinutes] = useState(25);
+  // Each order carries its own "ready in" time, chosen on its card.
+  const [prepById, setPrepById] = useState<Record<string, number>>({});
+  const prepFor = (id: string) => prepById[id] ?? DEFAULT_PREP;
   const { data, isLoading } = usePendingWebOrders();
   const orders = [...(data?.orders ?? [])].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
+  const [denyNotice, setDenyNotice] = useState<CancelNotice | null>(null);
   const acceptAll = useMutation({
     mutationFn: async () => {
-      const results = await Promise.allSettled(orders.map((o) => api.post(`/orders/${o.id}/accept`, { prepTimeMinutes: prepMinutes })));
+      const results = await Promise.allSettled(orders.map((o) => api.post(`/orders/${o.id}/accept`, { prepTimeMinutes: prepFor(o.id) })));
       return results.filter((r) => r.status === "fulfilled").length;
     },
     onSuccess: (n) => {
@@ -184,16 +208,6 @@ export function WebOrders() {
         description="Orders placed by customers online. Accept to send to the kitchen, or deny. Oldest first."
         actions={
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-slate-700">Ready in:</span>
-            {PREP_OPTIONS.map((m) => (
-              <button
-                key={m}
-                onClick={() => setPrepMinutes(m)}
-                className={`rounded-full border px-3 py-1 text-sm ${prepMinutes === m ? "bg-brand-600 text-white border-brand-600" : "border-slate-300 text-slate-700"}`}
-              >
-                {m} min
-              </button>
-            ))}
             {orders.length > 1 && (
               <Button disabled={acceptAll.isPending} onClick={() => acceptAll.mutate()}>
                 {acceptAll.isPending ? "Accepting…" : `Accept all ${orders.length}`}
@@ -211,9 +225,17 @@ export function WebOrders() {
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
         {orders.map((o) => (
-          <WebOrderCard key={o.id} order={o} prepMinutes={prepMinutes} now={now} />
+          <WebOrderCard
+            key={o.id}
+            order={o}
+            prepMinutes={prepFor(o.id)}
+            onPrepChange={(m) => setPrepById((prev) => ({ ...prev, [o.id]: m }))}
+            now={now}
+            onDenied={setDenyNotice}
+          />
         ))}
       </div>
+      <CancelNotifyModal notice={denyNotice} onClose={() => setDenyNotice(null)} />
     </div>
   );
 }

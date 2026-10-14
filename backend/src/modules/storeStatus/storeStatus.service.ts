@@ -21,6 +21,8 @@ export interface StoreStatus extends StoreHours {
   message: string | null;
   /** Next scheduled opening, e.g. "11:00" — null when manually closed with no schedule relevance. */
   opensAt: string | null;
+  /** Seconds until the schedule flips open<->closed. Null when a manual override is on or the store is open all day. */
+  changesInSeconds: number | null;
 }
 
 const SETTING_KEY = "store_hours";
@@ -51,10 +53,10 @@ export async function saveStoreHours(input: StoreHours, userId: string): Promise
 /** Pure — takes `now` so it can be tested without faking the clock. Supports overnight windows (e.g. 18:00–02:00). */
 export function computeStoreStatus(hours: StoreHours, now = new Date()): StoreStatus {
   let isOpen: boolean;
+  const cur = istMinutesNow(now);
   if (hours.mode === "OPEN") isOpen = true;
   else if (hours.mode === "CLOSED") isOpen = false;
   else {
-    const cur = istMinutesNow(now);
     const open = toMinutes(hours.openTime);
     const close = toMinutes(hours.closeTime);
     if (open === close) isOpen = true; // same time = open all day
@@ -68,7 +70,14 @@ export function computeStoreStatus(hours: StoreHours, now = new Date()): StoreSt
     else message = `We're closed right now. Orders open at ${hours.openTime}.`;
   }
 
-  return { ...hours, isOpen, message, opensAt: hours.mode === "AUTO" ? hours.openTime : null };
+  let changesInSeconds: number | null = null;
+  if (hours.mode === "AUTO" && hours.openTime !== hours.closeTime) {
+    const target = toMinutes(isOpen ? hours.closeTime : hours.openTime);
+    const deltaMin = (target - cur + 1440) % 1440 || 1440;
+    changesInSeconds = deltaMin * 60 - now.getUTCSeconds();
+  }
+
+  return { ...hours, isOpen, message, opensAt: hours.mode === "AUTO" ? hours.openTime : null, changesInSeconds };
 }
 
 export async function getStoreStatus(): Promise<StoreStatus> {

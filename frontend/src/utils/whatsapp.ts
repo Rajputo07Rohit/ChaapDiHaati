@@ -122,3 +122,36 @@ export function buildWhatsAppShareUrl(normalizedPhone: string | null, message: s
   const text = encodeURIComponent(message);
   return normalizedPhone ? `https://wa.me/${normalizedPhone}?text=${text}` : `https://api.whatsapp.com/send?text=${text}`;
 }
+
+/** Message telling a customer their order was cancelled/denied. `wasDenied`
+ * is for web orders staff turned down before accepting (wording: "couldn't
+ * accept") vs. an accepted order cancelled later. Mentions a refund only
+ * when the order was actually paid online. */
+export function buildCancelMessage(
+  order: SalesOrder,
+  profile: BusinessProfile,
+  reason: string,
+  wasDenied: boolean
+): string {
+  const name = order.customer_name?.trim();
+  const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
+  const out: string[] = [];
+  out.push(`Hi${name ? ` ${name}` : ""},`);
+  out.push("");
+  out.push(
+    wasDenied
+      ? `We're sorry — we couldn't accept your order #${order.order_number} from ${profile.businessName}.`
+      : `We're sorry — your order #${order.order_number} from ${profile.businessName} has been cancelled.`
+  );
+  if (reason.trim()) out.push("", `Reason: ${reason.trim()}`);
+  if (items.length) {
+    out.push("", "Order:");
+    for (const i of items) out.push(`• ${i.item_name_snapshot} × ${i.quantity}`);
+    out.push(`Total: ${formatPaise(order.net_total_paise)}`);
+  }
+  if (order.payment_status === "PAID") {
+    out.push("", `Since you've already paid ${formatPaise(order.net_total_paise)}, we'll refund it to your payment method.`);
+  }
+  out.push("", "We apologise for the inconvenience and hope to serve you soon. 🙏", "", `— ${profile.businessName}`);
+  return out.join("\n");
+}

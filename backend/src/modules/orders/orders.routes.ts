@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { User } from "../../db/models";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
@@ -244,7 +245,7 @@ ordersRouter.get(
   })
 );
 
-const assignRiderSchema = z.object({ riderId: z.string() });
+const assignRiderSchema = z.object({ riderId: z.string().optional() });
 
 ordersRouter.post(
   "/:id/assign-rider",
@@ -253,6 +254,7 @@ ordersRouter.post(
   asyncHandler(async (req, res) => {
     const input = assignRiderSchema.parse(req.body);
     const order = await ordersService.assignRider(req.params.id, input.riderId, req.user!.id);
-    res.json({ order });
+    const rider = order.assigned_rider_id ? await User.findById(order.assigned_rider_id) : null;
+    res.json({ order, riderName: rider?.fullName ?? null });
   })
 );

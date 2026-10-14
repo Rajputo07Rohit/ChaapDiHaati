@@ -4,22 +4,9 @@ import toast from "react-hot-toast";
 import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike, User } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
-import { PageHeader } from "../components/ui/Primitives";
+import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
+import { ORDER_TYPE_STYLE, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
 import { toDdMmYyyy } from "../utils/date";
-
-const ORDER_TYPE_LABEL: Record<string, string> = {
-  DINE_IN: "Dine-in",
-  TAKEAWAY: "Takeaway",
-  DELIVERY: "Delivery",
-  ONLINE: "Online",
-};
-
-const ORDER_TYPE_COLOR: Record<string, string> = {
-  DINE_IN: "bg-blue-100 text-blue-700",
-  TAKEAWAY: "bg-purple-100 text-purple-700",
-  DELIVERY: "bg-orange-100 text-orange-700",
-  ONLINE: "bg-teal-100 text-teal-700",
-};
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -65,7 +52,7 @@ function OrderTicket({ order }: { order: SalesOrder }) {
 
   return (
     <div
-      className={`rounded-2xl border-2 bg-white shadow-sm overflow-hidden flex flex-col ${
+      className={`rounded-2xl border-2 border-l-8 bg-white shadow-sm overflow-hidden flex flex-col ${ORDER_TYPE_STYLE[order.order_type]?.stripe ?? ""} ${
         ready ? "border-emerald-200 opacity-70" : urgent ? "border-rose-400" : "border-slate-200"
       }`}
     >
@@ -82,12 +69,9 @@ function OrderTicket({ order }: { order: SalesOrder }) {
 
       <div className="px-4 py-2 border-b border-slate-100 space-y-1.5">
         <div className="flex items-center justify-between">
-          <span
-            className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide ${
-              ORDER_TYPE_COLOR[order.order_type] ?? "bg-slate-100 text-slate-600"
-            }`}
-          >
-            {ORDER_TYPE_LABEL[order.order_type] ?? order.order_type}
+          <span className="flex items-center gap-1.5">
+            <OrderTypeBadge type={order.order_type} />
+            {(order.order_type === "DELIVERY" || order.order_type === "ONLINE") && <PaymentModeBanner order={order} />}
           </span>
           <span className="text-xs text-slate-400 tabular-nums">{formatTime(order.created_at)}</span>
         </div>
@@ -121,9 +105,9 @@ function OrderTicket({ order }: { order: SalesOrder }) {
         ))}
       </div>
 
-      {order.notes?.trim() && (
+      {customerNoteOf(order.notes) && (
         <div className="mx-4 mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
-          Special instructions: {order.notes}
+          Special instructions: {customerNoteOf(order.notes)}
         </div>
       )}
 

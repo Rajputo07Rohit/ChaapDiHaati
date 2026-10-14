@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2, Calendar, Sun, Moon } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
+import { PaymentModeBanner } from "../components/PaymentModeBanner";
 import { formatPaise } from "../utils/money";
 import { toDdMmYyyy } from "../utils/date";
 import { AppTheme, applyTheme, getStoredTheme } from "../utils/theme";
@@ -112,7 +113,11 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-lg font-extrabold text-slate-900">Order #{order.order_number}</span>
+        <span className="flex items-center gap-2">
+          <span className="text-lg font-extrabold text-slate-900">Order #{order.order_number}</span>
+          {/* Up top so the rider knows before arriving whether to collect cash. */}
+          <PaymentModeBanner order={order} large />
+        </span>
         {isDelivered ? (
           <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold uppercase bg-emerald-100 text-emerald-700">
             <CheckCircle2 size={12} /> Delivered

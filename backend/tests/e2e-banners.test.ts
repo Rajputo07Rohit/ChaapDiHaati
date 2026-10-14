@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 
 describe("Banner carousel", () => {
-  it("admin uploads an image, it's servable as a static file, and shows up in the public active list", async () => {
+  it("admin uploads an image, it's servable from the database, and shows up in the public active list", async () => {
     const { app } = await import("../src/app");
     const { User } = await import("../src/db/models");
     const { newId, nowIso } = await import("../src/utils/ids");
@@ -33,16 +33,16 @@ describe("Banner carousel", () => {
         .field("title", "Diwali Special")
         .attach("image", tmpFile);
       expect(createRes.status).toBe(201);
-      expect(createRes.body.banner.image_url).toMatch(/^\/uploads\/banners\/.+\.png$/);
+      expect(createRes.body.banner.image_url).toMatch(/^\/api\/public\/banners\/image\/.+$/);
       expect(createRes.body.banner.title).toBe("Diwali Special");
       expect(createRes.body.banner.active).toBe(true);
-      console.log("[OK] Banner uploaded, image_url points at /uploads/banners/*.png");
+      console.log("[OK] Banner uploaded, image_url points at the DB-backed image route");
 
       // The uploaded file is actually servable as a static asset.
       const imageRes = await request(app).get(createRes.body.banner.image_url);
       expect(imageRes.status).toBe(200);
       expect(imageRes.headers["content-type"]).toMatch(/^image\//);
-      console.log("[OK] Uploaded image is servable as a static file");
+      console.log("[OK] Uploaded image is servable from the database");
 
       // Shows up in the customer-facing active list.
       const activeRes = await request(app).get("/api/public/banners/active");

@@ -1,4 +1,4 @@
-import { Banner, BannerDoc } from "../../db/models";
+import { Banner, BannerDoc, BannerImage } from "../../db/models";
 import { newId, nowIso } from "../../utils/ids";
 import { NotFoundError, ValidationError } from "../../utils/errors";
 
@@ -22,13 +22,14 @@ function toRow(doc: BannerDoc): BannerRow {
   };
 }
 
-export async function createBanner(input: { imageUrl: string; title?: string | null; linkUrl?: string | null; userId: string }): Promise<BannerRow> {
-  if (!input.imageUrl) throw new ValidationError("An image is required.");
+export async function createBanner(input: { image: { contentType: string; data: Buffer }; title?: string | null; linkUrl?: string | null; userId: string }): Promise<BannerRow> {
+  if (!input.image?.data?.length) throw new ValidationError("An image is required.");
   const count = await Banner.countDocuments();
   const id = newId("banner");
+  await BannerImage.create({ _id: id, contentType: input.image.contentType, data: input.image.data });
   await Banner.create({
     _id: id,
-    imageUrl: input.imageUrl,
+    imageUrl: `/api/public/banners/image/${id}`,
     title: input.title?.trim() || null,
     linkUrl: input.linkUrl?.trim() || null,
     active: true,
@@ -69,4 +70,5 @@ export async function deleteBanner(id: string): Promise<void> {
   const doc = await Banner.findById(id);
   if (!doc) throw new NotFoundError("Banner");
   await doc.deleteOne();
+  await BannerImage.deleteOne({ _id: id });
 }

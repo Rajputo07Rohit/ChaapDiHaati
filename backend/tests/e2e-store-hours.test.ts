@@ -57,3 +57,15 @@ describe("Store hours & rumali rule", () => {
     await expect(order([curry])).resolves.toBeDefined();
   });
 });
+
+describe("Store status countdown", () => {
+  it("reports seconds until the schedule flips", async () => {
+    const { computeStoreStatus } = await import("../src/modules/storeStatus/storeStatus.service");
+    const base = { mode: "AUTO" as const, openTime: "11:00", closeTime: "23:00", closedMessage: "" };
+    // 22:00 IST (16:30 UTC) -> closes in 1h
+    expect(computeStoreStatus(base, new Date("2026-10-14T16:30:00Z")).changesInSeconds).toBe(3600);
+    // 23:30 IST -> opens at 11:00 next day, 11.5h
+    expect(computeStoreStatus(base, new Date("2026-10-14T18:00:00Z")).changesInSeconds).toBe(11.5 * 3600);
+    expect(computeStoreStatus({ ...base, mode: "CLOSED" }).changesInSeconds).toBeNull();
+  });
+});

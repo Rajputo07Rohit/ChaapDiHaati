@@ -1175,7 +1175,7 @@ export async function listRiders() {
  * prep tracking is unaffected — kitchenStatus is a wholly separate flag
  * (see markKitchenReady) the kitchen board filters on, not order status.
  */
-export async function assignRider(orderId: string, riderId: string, userId: string): Promise<OrderRow> {
+export async function assignRider(orderId: string, requestedRiderId: string | null | undefined, userId: string): Promise<OrderRow> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
   if (order.orderType !== "DELIVERY") {
@@ -1184,6 +1184,10 @@ export async function assignRider(orderId: string, riderId: string, userId: stri
   if (order.status === "CANCELLED" || order.status === "REFUNDED" || order.status === "COMPLETED") {
     throw new ValidationError(`Cannot assign a rider to a ${order.status.toLowerCase()} order.`);
   }
+  // No rider named = auto-pick the one with the fewest open deliveries, so
+  // packing staff never have to choose.
+  const riderId = requestedRiderId || (await pickLeastBusyRider());
+  if (!riderId) throw new ValidationError("No active riders available. Add a rider in Staff first.");
   const rider = await User.findOne({ _id: riderId, role: "RIDER", active: true });
   if (!rider) throw new ValidationError("That user is not an active rider.");
 
