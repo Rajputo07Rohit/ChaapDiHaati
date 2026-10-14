@@ -3,9 +3,11 @@ import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
+import { redactOrderFieldsForRole } from "../../middleware/security";
 import * as ordersService from "./orders.service";
 
 export const ordersRouter = Router();
+ordersRouter.use(redactOrderFieldsForRole);
 
 const orderItemSchema = z.object({
   menuItemId: z.string(),
@@ -41,6 +43,7 @@ ordersRouter.get(
       status: statusParam?.includes(",") ? statusParam.split(",") : statusParam,
       businessDate: req.query.businessDate as string | undefined,
       limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
+      before: req.query.before as string | undefined,
     });
     res.json({ orders });
   })

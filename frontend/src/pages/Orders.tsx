@@ -1,6 +1,6 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { MessageCircle, Phone, MapPin, User as UserIcon, Truck, Calendar, Eye, EyeOff } from "lucide-react";
 import { api, ApiError } from "../api/client";
@@ -54,19 +54,43 @@ export function Orders() {
     queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods"),
   });
 
-  const { data, isLoading } = useQuery({
+  // Infinite scroll: pages of PAGE_SIZE, newest first, each page keyed off the
+  // createdAt of the last order of the previous one.
+  const PAGE_SIZE = 50;
+  const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ["orders", status, businessDate],
-    queryFn: () => {
-      const params = new URLSearchParams();
+    initialPageParam: "" as string,
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
       if (status) params.set("status", status);
       if (businessDate) params.set("businessDate", businessDate);
-      if (!status && !businessDate) params.set("limit", "100");
+      if (pageParam) params.set("before", pageParam);
       return api.get<{ orders: SalesOrder[] }>(`/orders?${params.toString()}`);
     },
-    refetchInterval: 15_000,
+    getNextPageParam: (lastPage) =>
+      lastPage.orders.length < PAGE_SIZE ? undefined : lastPage.orders[lastPage.orders.length - 1].created_at,
+    // Polling re-fetches every loaded page, so stop once the user has scrolled
+    // deep into history (they're reading old orders, not watching live ones).
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 2 ? false : 15_000),
   });
+  const allOrders = data?.pages.flatMap((p) => p.orders) ?? [];
 
-  const filteredOrders = (data?.orders ?? []).filter(
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el || !hasNextPage) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !isFetchingNextPage) fetchNextPage();
+      },
+      { root: scrollRef.current, rootMargin: "400px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, allOrders.length]);
+
+  const filteredOrders = allOrders.filter(
     (o) => !paymentMode || (o.payments ?? []).some((p) => p.payment_method_type === paymentMode)
   );
 
@@ -269,9 +293,9 @@ export function Orders() {
       />
 
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
+        <div ref={scrollRef} className="overflow-auto max-h-[calc(100vh-18rem)] min-h-[20rem]">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase sticky top-0 z-10">
               <tr>
                 <th className="text-left px-4 py-2.5">Order #</th>
                 <th className="text-left px-4 py-2.5">Customer</th>
@@ -377,6 +401,17 @@ export function Orders() {
             </tbody>
           </table>
           {!isLoading && filteredOrders.length === 0 && <EmptyState title="No orders found" description="Try a different filter." />}
+          <div ref={loadMoreRef} className="py-4 text-center text-xs text-slate-400">
+            {isFetchingNextPage ? (
+              "Loading older orders…"
+            ) : hasNextPage ? (
+              <button onClick={() => fetchNextPage()} className="font-semibold text-brand-600 hover:underline">
+                Load older orders
+              </button>
+            ) : (
+              filteredOrders.length > 0 && `That's everything · ${allOrders.length} orders`
+            )}
+          </div>
         </div>
       </Card>
 

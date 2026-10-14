@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { ValidationError } from "../../utils/errors";
+import { otpSendLimiter, otpVerifyLimiter } from "../../middleware/security";
 import * as customerAuthService from "./customerAuth.service";
 
 export const customerAuthRouter = Router();
@@ -17,6 +18,7 @@ const sendOtpSchema = z.object({ phone: z.string() });
 
 customerAuthRouter.post(
   "/send-otp",
+  otpSendLimiter,
   asyncHandler(async (req, res) => {
     const { phone } = sendOtpSchema.parse(req.body);
     const e164 = toE164(phone);
@@ -35,6 +37,7 @@ const verifyOtpSchema = z.object({
 
 customerAuthRouter.post(
   "/verify-otp",
+  otpVerifyLimiter,
   asyncHandler(async (req, res) => {
     const { sessionId, otp, phone } = verifyOtpSchema.parse(req.body);
     const e164 = toE164(phone);

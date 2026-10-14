@@ -13,6 +13,7 @@ import { CreateCustomerOrderInput, CreateRazorpayOrderInput } from "./customerOr
 import { ForbiddenError } from "../../utils/errors";
 import { validatePromoCodeForOrder } from "../promoCodes/promoCodes.service";
 import { PromoCode } from "../../db/models";
+import { assertRumaliHasMain, assertStoreOpen } from "../storeStatus/storeStatus.service";
 
 let razorpayClient: Razorpay | null = null;
 function getRazorpayClient(): Razorpay {
@@ -31,7 +32,9 @@ function getRazorpayClient(): Razorpay {
  * the client, only from server-resolved item prices + delivery fee.
  */
 export async function createRazorpayOrder(input: CreateRazorpayOrderInput, phone: string): Promise<{ razorpayOrderId: string; amountPaise: number; keyId: string }> {
+  await assertStoreOpen();
   const resolvedItems = await resolveOrderItems(input.items);
+  assertRumaliHasMain(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const promo = input.promoCode ? await validatePromoCodeForOrder(input.promoCode, phone, subtotalOnly) : null;
   const { subtotal, net } = computeOrderTotals(resolvedItems, promo?.discountType ?? "FLAT", promo?.discountValue ?? 0);
@@ -103,6 +106,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
     if (existing) return getOrderOrThrow(existing._id);
   }
 
+  await assertStoreOpen();
   const businessDate = todayBusinessDate();
   const closing = await getClosingByDate(businessDate);
   if (closing?.status === "CLOSED") {
@@ -114,6 +118,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
   const isCodDelivery = input.orderType === "DELIVERY" && input.paymentProvider === "COD";
 
   const resolvedItems = await resolveOrderItems(input.items);
+  assertRumaliHasMain(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   // Re-validated here even though createRazorpayOrder already checked it for
   // the Razorpay path — this is the call that actually charges/commits, so

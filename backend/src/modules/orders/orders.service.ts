@@ -161,11 +161,13 @@ export async function getOrderFull(id: string) {
 }
 
 export async function listOrders(
-  filters: { status?: string | string[]; businessDate?: string; limit?: number } = {}
+  filters: { status?: string | string[]; businessDate?: string; limit?: number; before?: string } = {}
 ): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>>; items: ReturnType<typeof toItemRow>[] })[]> {
   const query: Record<string, unknown> = {};
   if (filters.status) query.status = Array.isArray(filters.status) ? { $in: filters.status } : filters.status;
   if (filters.businessDate) query.businessDate = filters.businessDate;
+  // Cursor for infinite scroll: the createdAt of the last order already loaded.
+  if (filters.before) query.createdAt = { $lt: filters.before };
   let q = Order.find(query).sort({ createdAt: -1 });
   if (filters.limit) q = q.limit(filters.limit);
   const docs = await q;

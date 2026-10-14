@@ -10,11 +10,16 @@ function required(name: string, fallback?: string): string {
   return v;
 }
 
+const DEV_JWT_SECRET = "dev-only-insecure-secret-change-me";
+if (process.env.NODE_ENV === "production" && (!process.env.JWT_SECRET || process.env.JWT_SECRET === DEV_JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
+  throw new Error("JWT_SECRET must be set to a random string of at least 32 characters in production.");
+}
+
 export const env = {
   port: parseInt(process.env.PORT || "4000", 10),
   nodeEnv: process.env.NODE_ENV || "development",
   mongodbUri: required("MONGODB_URI", "mongodb://127.0.0.1:27017/chaapdihaati"),
-  jwtSecret: required("JWT_SECRET", "dev-only-insecure-secret-change-me"),
+  jwtSecret: required("JWT_SECRET", DEV_JWT_SECRET),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "12h",
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS || "10", 10),

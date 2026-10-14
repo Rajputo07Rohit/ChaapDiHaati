@@ -8,7 +8,6 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
       error: {
         message: err.errors[0]?.message || "Invalid input.",
         code: "VALIDATION_ERROR",
-        details: err.errors,
       },
     });
   }

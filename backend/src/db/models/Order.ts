@@ -225,6 +225,10 @@ orderSchema.index({ assignedRiderId: 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ clientIdempotencyKey: 1 }, { unique: true, sparse: true });
 orderSchema.index({ promoCode: 1, customerPhone: 1 });
+// Customer order history: filter by phone, newest first.
+orderSchema.index({ customerPhone: 1, createdAt: -1 });
+// Staff order list filtered by status, newest first.
+orderSchema.index({ status: 1, createdAt: -1 });
 
 export const Order = model<OrderDoc>("Order", orderSchema);
 

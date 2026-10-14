@@ -6,6 +6,7 @@ import path from "path";
 import { env } from "./config/env";
 import { apiRouter } from "./routes";
 import { errorHandler } from "./middleware/errorHandler";
+import { securityHeaders, noStoreApi } from "./middleware/security";
 
 export const app = express();
 
@@ -15,9 +16,12 @@ export const app = express();
 // rate limiting (everyone shared one bucket) and would make a login's
 // recorded IP useless.
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(securityHeaders);
+app.use("/api", noStoreApi);
 
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 
 const authLimiter = rateLimit({

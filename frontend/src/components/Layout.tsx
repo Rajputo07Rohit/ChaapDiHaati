@@ -27,10 +27,14 @@ import {
   Sun,
   Moon,
   Contrast,
+  Bell,
+  Globe,
+  Package,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Role } from "../api/types";
-import { PendingOrdersPopup } from "./PendingOrdersPopup";
+import { StoreQuickToggle } from "./StoreHours";
+import { WebOrderNotifier, usePendingCount } from "./WebOrderNotifier";
 import { AppTheme, applyTheme, getStoredTheme } from "../utils/theme";
 import logo from "../assets/logo.png";
 
@@ -46,6 +50,8 @@ const NAV: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "MANAGER"] },
   { to: "/pos", label: "POS / New Order", icon: ShoppingCart, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/kitchen", label: "Kitchen", icon: ChefHat, roles: ["ADMIN", "MANAGER", "STAFF"] },
+  { to: "/web-orders", label: "Web Orders", icon: Globe, roles: ["ADMIN", "MANAGER", "STAFF"] },
+  { to: "/packing", label: "Packing", icon: Package, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/orders", label: "Orders", icon: ClipboardList, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/menu", label: "Menu", icon: BookOpen, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/inventory", label: "Inventory", icon: Boxes, roles: ["ADMIN", "MANAGER"] },
@@ -69,6 +75,7 @@ export function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pendingCount = usePendingCount();
   const [theme, setTheme] = useState<AppTheme>(getStoredTheme);
 
   useEffect(() => {
@@ -85,16 +92,32 @@ export function Layout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Mobile top bar */}
-      <div className="lg:hidden fixed top-0 inset-x-0 h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 z-40">
-        <button onClick={() => setMobileOpen(true)} className="text-slate-600">
-          <MenuIcon size={22} />
+      {/* Top bar */}
+      <div className="fixed top-0 inset-x-0 lg:left-64 h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 z-40">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMobileOpen(true)} className="text-slate-600 lg:hidden">
+            <MenuIcon size={22} />
+          </button>
+          <span className="font-semibold text-brand-700 flex items-center gap-2 lg:hidden">
+            <img src={logo} alt="" className="w-7 h-7 object-contain" />
+            Chaap Di Haati
+          </span>
+        </div>
+        <button
+          onClick={() => navigate("/web-orders")}
+          title="Web orders waiting"
+          className={`relative flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-semibold ${
+            pendingCount > 0 ? "bg-red-50 text-red-700" : "text-slate-500 hover:bg-slate-100"
+          }`}
+        >
+          <Bell size={20} className={pendingCount > 0 ? "animate-pulse" : ""} />
+          {pendingCount > 0 ? `${pendingCount} pending` : "No pending"}
+          {pendingCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[1.25rem] rounded-full bg-red-600 px-1 text-center text-[11px] font-bold leading-5 text-white">
+              {pendingCount}
+            </span>
+          )}
         </button>
-        <span className="font-semibold text-brand-700 flex items-center gap-2">
-          <img src={logo} alt="" className="w-7 h-7 object-contain" />
-          Chaap Di Haati
-        </span>
-        <div className="w-6" />
       </div>
 
       {/* Sidebar */}
@@ -128,7 +151,12 @@ export function Layout() {
               }
             >
               <item.icon size={18} />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.to === "/web-orders" && pendingCount > 0 && (
+                <span className="min-w-[1.5rem] rounded-full bg-red-600 px-2 py-0.5 text-center text-xs font-bold text-white">
+                  {pendingCount}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -137,6 +165,7 @@ export function Layout() {
             <div className="font-medium text-slate-200">{user.fullName}</div>
             <div>{user.role}</div>
           </div>
+          {user.role !== "RIDER" && <StoreQuickToggle />}
           <div className="px-3 pb-2">
             <div className="text-[11px] text-slate-500 uppercase tracking-wide mb-1.5">Theme</div>
             <div className="grid grid-cols-3 gap-1 bg-slate-800 rounded-lg p-1">
@@ -172,13 +201,13 @@ export function Layout() {
 
       {mobileOpen && <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
 
-      <main className="flex-1 overflow-y-auto pt-14 lg:pt-0">
+      <main className="flex-1 overflow-y-auto pt-14">
         <div className="max-w-[1400px] mx-auto p-4 md:p-8">
           <Outlet />
         </div>
       </main>
 
-      <PendingOrdersPopup />
+      <WebOrderNotifier />
     </div>
   );
 }

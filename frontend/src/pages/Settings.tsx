@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api, ApiError } from "../api/client";
 import { BusinessProfile, PaymentMethod, Role, User } from "../api/types";
+import { StoreHoursSection } from "../components/StoreHours";
 import { Badge, Button, Card, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
 
 export function SettingsPage() {
@@ -10,6 +11,7 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Settings" description="Admin controls: users, payment methods, backups." />
       <div className="space-y-8">
+        <StoreHoursSection />
         <BusinessProfileSection />
         <UsersSection />
         <PaymentMethodsSection />
