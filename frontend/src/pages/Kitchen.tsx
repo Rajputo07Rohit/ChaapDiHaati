@@ -1,13 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock, CheckCircle2, Calendar, UtensilsCrossed, Bike, MapPin, Phone, AlertTriangle, Undo2 } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike, User, Trash2 } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
-import { ORDER_TYPE_STYLE, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
+import { ORDER_TYPE_STYLE, PageHeader } from "../components/ui/Primitives";
 import { toDdMmYyyy } from "../utils/date";
-import { playChime } from "../components/WebOrderNotifier";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -15,6 +14,10 @@ function todayIso(): string {
 
 function minutesAgo(iso: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 /** Ticks periodically purely to re-render elapsed-time labels — the order
@@ -30,107 +33,139 @@ function useClockTick() {
 function OrderTicket({ order }: { order: SalesOrder }) {
   const queryClient = useQueryClient();
   const age = minutesAgo(order.created_at);
+  const urgent = order.kitchen_status === "PENDING" && age >= 15;
   const ready = order.kitchen_status === "READY";
-  const late = !ready && age >= 15;
-  const warn = !ready && age >= 10 && !late;
   const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
-  const isDelivery = order.order_type === "DELIVERY" || order.order_type === "ONLINE";
 
-  // The chef taps Ready once the food is cooked AND packed. Delivery orders
-  // go straight to the least-busy rider in the same step; dine-in / takeaway
-  // just leave the board. The button locks while saving (no double taps) and
-  // stays locked once the ticket is ready.
+  // Kitchen prep is tracked independently of the order's own status —
+  // a counter sale is often already paid and COMPLETED the instant it's
+  // rung up, well before the food is actually cooked. This is the one
+  // action the kitchen screen has: flip it to ready.
   const markReadyMutation = useMutation({
-    mutationFn: () => api.post<{ dispatchWarning: string | null }>(`/orders/${order.id}/kitchen-ready`),
+    mutationFn: () => api.post<{ dispatchWarning?: string | null }>(`/orders/${order.id}/kitchen-ready`),
     onSuccess: (res) => {
-      if (res.dispatchWarning) toast.error(`#${order.order_number} ready, but no rider sent: ${res.dispatchWarning}`, { duration: 8000 });
-      else toast.success(isDelivery ? `#${order.order_number} ready — sent to rider` : `#${order.order_number} ready`);
+      // Delivery orders are handed to the least-busy rider by the server in this same step.
+      if (res?.dispatchWarning) toast.error(`Order #${order.order_number} ready, but no rider was sent: ${res.dispatchWarning}`, { duration: 8000 });
+      else toast.success(order.order_type === "DELIVERY" ? `Order #${order.order_number} ready — sent to rider` : `Order #${order.order_number} ready`);
       queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update order"),
   });
 
-  const orderNote = customerNoteOf(order.notes);
+  const removeMutation = useMutation({
+    mutationFn: () => api.post(`/orders/${order.id}/kitchen-remove`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not remove order"),
+  });
 
   return (
     <div
-      className={`rounded-2xl border-2 border-l-8 bg-white shadow-sm overflow-hidden flex flex-col ${ORDER_TYPE_STYLE[order.order_type]?.stripe ?? ""} ${
-        ready ? "border-emerald-200 opacity-70" : late ? "border-rose-400" : warn ? "border-amber-300" : "border-slate-200"
+      className={`rounded-xl border-2 bg-white overflow-hidden flex flex-col ${
+        ready ? "border-emerald-300" : urgent ? "border-rose-400" : "border-slate-200"
       }`}
     >
-      <div className={`flex items-center justify-between gap-2 px-3.5 py-2.5 ${ready ? "bg-emerald-50" : late ? "bg-rose-50" : warn ? "bg-amber-50" : "bg-slate-50"}`}>
-        <span className="flex items-center gap-2 min-w-0">
-          <span className="text-2xl font-extrabold text-slate-900 leading-none">#{order.order_number}</span>
-          <OrderTypeBadge type={order.order_type} />
-        </span>
+      <div className={`flex items-center justify-between gap-3 px-5 py-3.5 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
+        <span className="text-3xl font-black leading-none tracking-tight text-slate-900">#{order.order_number}</span>
         <span
-          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-bold whitespace-nowrap tabular-nums ${
-            ready ? "bg-emerald-600 text-white" : late ? "bg-rose-600 text-white animate-pulse" : warn ? "bg-amber-500 text-white" : "bg-emerald-100 text-emerald-700"
+          className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-extrabold uppercase tracking-wide ${
+            ORDER_TYPE_STYLE[order.order_type]?.badge ?? "bg-slate-200 text-slate-700"
           }`}
         >
-          <Clock size={14} /> {age === 0 ? "now" : `${age} min`}
+          {ORDER_TYPE_STYLE[order.order_type]?.label ?? order.order_type}
         </span>
       </div>
 
-      <div className="px-3.5 py-2 border-b border-slate-100 space-y-1">
-        <div className="flex items-center justify-between gap-2">
-          <PaymentModeBanner order={order} />
-          {order.customer_name?.trim() && <span className="text-sm font-bold text-slate-900 truncate">{order.customer_name}</span>}
+      <div className="px-5 py-3 border-b border-slate-100 space-y-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <span
+            className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-bold tabular-nums ${
+              ready ? "bg-emerald-600 text-white" : urgent ? "bg-rose-600 text-white animate-pulse" : "bg-slate-200 text-slate-700"
+            }`}
+          >
+            <Clock size={14} /> {age === 0 ? "Just now" : `${age} min`}
+          </span>
+          <span className="whitespace-nowrap text-sm font-medium text-slate-400 tabular-nums">{formatTime(order.created_at)}</span>
         </div>
-        {order.customer_phone && (
-          <div className="flex items-center gap-1.5 text-sm text-slate-700">
-            <Phone size={13} className="text-slate-500 shrink-0" /> {order.customer_phone}
+        {(order.customer_name?.trim() || order.order_type === "DELIVERY" || order.order_type === "ONLINE") && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-2 text-base font-bold text-slate-900">
+              <User size={16} className="shrink-0 text-slate-400" />
+              <span className="truncate">{order.customer_name?.trim() || "Walk-in"}</span>
+            </span>
+            {(order.order_type === "DELIVERY" || order.order_type === "ONLINE") && (
+              <span className="shrink-0">
+                <PaymentModeBanner order={order} />
+              </span>
+            )}
           </div>
         )}
-        {isDelivery && order.delivery_address?.trim() && (
-          <div className="flex items-start gap-1.5 text-sm text-slate-800 font-medium leading-snug">
-            <MapPin size={14} className="text-orange-500 shrink-0 mt-0.5" /> {order.delivery_address}
+        {order.order_type === "DELIVERY" && order.delivery_address?.trim() && (
+          <div className="flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm leading-snug text-slate-700">
+            <MapPin size={15} className="mt-0.5 shrink-0 text-orange-500" />
+            <span className="font-medium">{order.delivery_address}</span>
           </div>
         )}
       </div>
 
-      <div className="flex-1 px-3.5 py-2.5 divide-y divide-slate-100">
+      <div className="flex-1 px-5 py-2 divide-y divide-slate-100">
         {items.map((item) => (
-          <div key={item.id} className="flex items-start justify-between gap-2 py-1.5 first:pt-0 last:pb-0">
-            <div className="min-w-0 leading-snug">
-              <span className="text-base font-bold text-slate-900">{item.item_name_snapshot}</span>
+          <div key={item.id} className="flex items-start justify-between gap-3 py-2.5">
+            <div>
+              <span className="text-lg font-bold text-slate-900">{item.item_name_snapshot}</span>
               {item.price_type !== "SINGLE" && <span className="text-sm text-slate-500"> ({item.price_type})</span>}
               {(item.addons ?? []).length > 0 && (
                 <div className="text-sm text-slate-600">+ {item.addons.map((a) => a.name).join(", ")}</div>
               )}
-              {item.special_instructions && <div className="text-sm text-amber-700 font-semibold">⚠ {item.special_instructions}</div>}
+              {item.special_instructions && <div className="text-sm text-amber-700 font-medium">Note: {item.special_instructions}</div>}
             </div>
-            <span className="shrink-0 rounded-lg bg-brand-50 px-2.5 py-0.5 text-xl font-extrabold tabular-nums leading-tight text-brand-700">×{item.quantity}</span>
+            <span className="text-2xl font-extrabold text-brand-600 tabular-nums shrink-0">×{item.quantity}</span>
           </div>
         ))}
       </div>
 
-      {orderNote && (
-        <div className="mx-3.5 mb-2.5 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-sm font-semibold text-amber-800">
-          ⚠ {orderNote}
+      {customerNoteOf(order.notes) && (
+        <div className="mx-5 mb-3.5 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
+          Special instructions: {customerNoteOf(order.notes)}
         </div>
       )}
 
-      {ready ? (
-        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-base py-3">
-          <CheckCircle2 size={18} /> Ready
-        </div>
-      ) : (
+      <div className="grid grid-cols-[1fr_auto] gap-2 p-3 pt-0">
         <button
-          disabled={markReadyMutation.isPending || markReadyMutation.isSuccess}
+          disabled={ready || markReadyMutation.isPending || markReadyMutation.isSuccess}
           onClick={() => markReadyMutation.mutate()}
-          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-bold text-lg py-4 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
+          className={`flex items-center justify-center gap-1.5 rounded-lg font-bold text-lg py-3.5 [touch-action:manipulation] ${
+            ready || markReadyMutation.isSuccess
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-emerald-600 text-white disabled:opacity-50 active:bg-emerald-700"
+          }`}
         >
-          {isDelivery ? <Bike size={20} /> : <CheckCircle2 size={20} />}
-          {markReadyMutation.isPending || markReadyMutation.isSuccess ? "Saving…" : isDelivery ? "Ready — Send to rider" : "Ready"}
+          {ready || markReadyMutation.isSuccess ? (
+            <>
+              <CheckCircle2 size={18} /> Ready
+            </>
+          ) : markReadyMutation.isPending ? (
+            "Marking Ready…"
+          ) : (
+            "Mark Ready"
+          )}
         </button>
-      )}
+        {/* Only usable once the order is marked ready; clears the ticket off the board. */}
+        <button
+          disabled={!ready || removeMutation.isPending}
+          onClick={() => removeMutation.mutate()}
+          className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-4 font-bold text-base text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent [touch-action:manipulation]"
+        >
+          <Trash2 size={16} /> Remove
+        </button>
+      </div>
     </div>
   );
 }
 
-/** Groups orders by business date (most recent date first, orders within
+/** Groups orders by business date (oldest date first, orders within
  * a date oldest-first so the longest-waiting ticket is the first thing
  * the kitchen sees). */
 function groupByDate(orders: SalesOrder[]): [string, SalesOrder[]][] {
@@ -141,7 +176,7 @@ function groupByDate(orders: SalesOrder[]): [string, SalesOrder[]][] {
     if (group) group[1].push(o);
     else groups.push([o.business_date, [o]]);
   }
-  return groups.sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0));
+  return groups.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function KitchenSection({
@@ -169,6 +204,8 @@ function KitchenSection({
         </span>
       </div>
 
+      {/* Each lane scrolls on its own; the scrollbar is hidden. */}
+      <div className="no-scrollbar mt-3 max-h-[calc(100vh-15rem)] overflow-y-auto">
       {ordersByDate.length === 0 && (
         <div className="text-center text-slate-400 py-14 border border-dashed border-slate-200 rounded-2xl mt-3">
           <ChefHat size={36} className="mx-auto mb-2 opacity-40" />
@@ -178,57 +215,22 @@ function KitchenSection({
 
       {ordersByDate.map(([date, dateOrders]) => (
         <Fragment key={date}>
-          <div className="flex items-center gap-2 bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg mt-3 first:mt-3">
+          <div className="flex items-center gap-2 bg-slate-800 text-white text-sm font-bold px-4 py-2 rounded-xl mt-4 first:mt-3">
             <Calendar size={14} />
             {toDdMmYyyy(date)}
             <span className="font-normal text-slate-300">
               · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
             </span>
           </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(265px,1fr))] gap-3.5 mt-3">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-3">
             {dateOrders.map((o) => (
               <OrderTicket key={o.id} order={o} />
             ))}
           </div>
         </Fragment>
       ))}
-    </section>
-  );
-}
-
-/** Orders marked ready in the last 10 minutes, with a one-tap undo for mis-taps. */
-function RecentlyReady({ orders }: { orders: SalesOrder[] }) {
-  const queryClient = useQueryClient();
-  const undo = useMutation({
-    mutationFn: (id: string) => api.post(`/orders/${id}/kitchen-undo`),
-    onSuccess: () => {
-      toast.success("Order moved back to the kitchen");
-      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
-      queryClient.invalidateQueries({ queryKey: ["orders"] });
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not undo"),
-  });
-  if (orders.length === 0) return null;
-  return (
-    <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
-      <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">Recently ready</div>
-      <div className="flex flex-wrap gap-2">
-        {orders.map((o) => (
-          <span key={o.id} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-sm">
-            <CheckCircle2 size={14} className="text-emerald-600" />
-            <span className="font-bold text-slate-900">#{o.order_number}</span>
-            <OrderTypeBadge type={o.order_type} />
-            <button
-              disabled={undo.isPending}
-              onClick={() => undo.mutate(o.id)}
-              className="inline-flex items-center gap-1 font-semibold text-slate-500 hover:text-rose-600 disabled:opacity-50"
-            >
-              <Undo2 size={13} /> Undo
-            </button>
-          </span>
-        ))}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -245,8 +247,10 @@ export function Kitchen() {
   const { data, isLoading } = useQuery({
     queryKey: ["kitchen-orders", showReady, businessDate],
     queryFn: () =>
-      api.get<{ orders: SalesOrder[] }>(showReady ? `/orders?businessDate=${businessDate}&limit=300` : `/orders?limit=300`),
-    refetchInterval: 10_000,
+      api.get<{ orders: SalesOrder[] }>(showReady ? `/orders?businessDate=${businessDate}&limit=300` : `/orders/kitchen`),
+    // The default feed is tiny (only open tickets), so poll fast — and keep polling in a background tab.
+    refetchInterval: showReady ? 15_000 : 4_000,
+    refetchIntervalInBackground: true,
   });
 
   // Every order gets kitchen tracking regardless of type/status — a
@@ -258,7 +262,13 @@ export function Kitchen() {
   // that gets denied a moment later.
   const filtered = (data?.orders ?? [])
     .filter((o) => o.status !== "CANCELLED" && o.status !== "REFUNDED" && o.status !== "PENDING_ACCEPTANCE")
-    .filter((o) => showReady || o.kitchen_status === "PENDING");
+    // Ready tickets stay on the board (with Remove enabled) until staff clear them.
+    .filter(
+      (o) =>
+        showReady ||
+        o.kitchen_status === "PENDING" ||
+        (!o.kitchen_removed_at && !!o.kitchen_ready_at && minutesAgo(o.kitchen_ready_at) < 360)
+    );
 
   // Dine-in and takeaway are cooked-and-served-on-the-spot; delivery
   // (and online, which is fulfilled the same way) has its own prep/pack
@@ -269,29 +279,11 @@ export function Kitchen() {
 
   const isToday = businessDate === todayIso();
 
-  // Chime when a new ticket lands (not on the first load).
-  const pendingIds = (data?.orders ?? [])
-    .filter((o) => o.kitchen_status === "PENDING" && !["CANCELLED", "REFUNDED", "PENDING_ACCEPTANCE", "DRAFT"].includes(o.status))
-    .map((o) => o.id);
-  const seen = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    if (!data) return;
-    const ids = new Set(pendingIds);
-    if (seen.current && [...ids].some((id) => !seen.current!.has(id))) playChime();
-    seen.current = ids;
-  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const lateCount = filtered.filter((o) => o.kitchen_status === "PENDING" && minutesAgo(o.created_at) >= 15).length;
-  const recentlyReady = (data?.orders ?? [])
-    .filter((o) => o.kitchen_status === "READY" && o.packed_at && minutesAgo(o.packed_at) < 10 && !["CANCELLED", "REFUNDED"].includes(o.status))
-    .filter((o) => !(o.order_type === "DELIVERY" && ["DELIVERED", "COMPLETED"].includes(o.status)))
-    .sort((a, b) => new Date(b.packed_at!).getTime() - new Date(a.packed_at!).getTime());
-
   return (
     <div>
       <PageHeader
         title="Kitchen"
-        description="Cook, pack, then tap Ready. Delivery orders go straight to a rider; dine-in and takeaway leave the board."
+        description="Orders waiting to be prepared. Tap Mark Ready once an order is done."
         actions={
           <div className="flex items-center gap-3 flex-wrap">
             <button
@@ -320,11 +312,6 @@ export function Kitchen() {
           </div>
         }
       />
-      {lateCount > 0 && !showReady && (
-        <div className="mb-3 flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-bold text-white">
-          <AlertTriangle size={16} /> {lateCount} order{lateCount > 1 ? "s" : ""} waiting over 15 minutes
-        </div>
-      )}
       {isLoading && <div className="text-center text-slate-400 py-16">Loading…</div>}
       {!isLoading && filtered.length === 0 && (
         <div className="text-center text-slate-400 py-24">
@@ -335,23 +322,22 @@ export function Kitchen() {
       {!isLoading && filtered.length > 0 && (
         <div className="flex flex-col xl:flex-row gap-6 mt-2">
           <KitchenSection
-            title="Delivery"
-            icon={<Bike size={18} />}
-            accent="bg-orange-600"
-            orders={delivery}
-            emptyLabel={showReady ? "No delivery orders that day." : "No delivery orders waiting."}
-          />
-          <div className="hidden xl:block w-px bg-slate-200" />
-          <KitchenSection
             title="Dine-in & Takeaway"
             icon={<UtensilsCrossed size={18} />}
             accent="bg-blue-600"
             orders={dineInTakeaway}
             emptyLabel={showReady ? "No dine-in/takeaway orders that day." : "No dine-in/takeaway orders waiting."}
           />
+          <div className="hidden xl:block w-px bg-slate-200" />
+          <KitchenSection
+            title="Delivery"
+            icon={<Bike size={18} />}
+            accent="bg-orange-600"
+            orders={delivery}
+            emptyLabel={showReady ? "No delivery orders that day." : "No delivery orders waiting."}
+          />
         </div>
       )}
-      {!showReady && <RecentlyReady orders={recentlyReady} />}
     </div>
   );
 }

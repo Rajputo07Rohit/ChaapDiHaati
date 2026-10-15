@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Phone, Copy, MapPin, LogOut, Package, CheckCircle2, Calendar, Sun, Moon } from "lucide-react";
@@ -9,6 +9,7 @@ import { formatPaise } from "../utils/money";
 import { toDdMmYyyy } from "../utils/date";
 import { AppTheme, applyTheme, getStoredTheme } from "../utils/theme";
 import { useAuth } from "../context/AuthContext";
+import { playChime } from "../components/WebOrderNotifier";
 import logo from "../assets/logo.png";
 
 function copyNumber(phone: string) {
@@ -40,6 +41,10 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
   const remaining = remainingPaise(order);
   const alreadyPaid = order.net_total_paise - remaining;
   const isDelivered = order.status !== "OUT_FOR_DELIVERY";
+  // Rider is assigned as soon as the order reaches the kitchen; until the kitchen taps
+  // Ready the food isn't there yet. (Old stuck orders >3h are never blocked.)
+  const preparing =
+    !isDelivered && order.kitchen_status === "PENDING" && Date.now() - new Date(order.created_at).getTime() < 3 * 3_600_000;
 
   // How the customer actually paid the rider on arrival — Cash goes into
   // Cash-in-Hand, UPI (scan-to-pay) goes into Bank Balance, matching how
@@ -125,9 +130,19 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
             <CheckCircle2 size={12} /> Delivered
           </span>
         ) : (
-          <span className="px-2 py-1 rounded-full text-[11px] font-semibold uppercase bg-orange-100 text-orange-700">Out for Delivery</span>
+          preparing ? (
+            <span className="px-2 py-1 rounded-full text-[11px] font-semibold uppercase bg-amber-100 text-amber-700">Being prepared</span>
+          ) : (
+            <span className="px-2 py-1 rounded-full text-[11px] font-semibold uppercase bg-orange-100 text-orange-700">Ready — pick up</span>
+          )
         )}
       </div>
+
+      {preparing && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
+          🍳 The kitchen is preparing this order — you'll get a beep when it's ready to pick up.
+        </div>
+      )}
 
       <div className="text-base font-bold text-slate-900">{order.customer_name || "Customer"}</div>
 
@@ -191,7 +206,7 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
             <>
               <div className="flex gap-1.5">
                 <button
-                  disabled={collectMutation.isPending}
+                  disabled={preparing || collectMutation.isPending}
                   onClick={() => collectFull("CASH")}
                   className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
                     payMode === "CASH" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
@@ -200,7 +215,7 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
                   {payMode === "CASH" && collectMutation.isPending ? "Recording…" : "Cash"}
                 </button>
                 <button
-                  disabled={collectMutation.isPending}
+                  disabled={preparing || collectMutation.isPending}
                   onClick={() => collectFull("UPI")}
                   className={`flex-1 text-sm font-bold py-2.5 rounded-lg disabled:opacity-50 [touch-action:manipulation] ${
                     payMode === "UPI" ? "bg-rose-600 text-white" : "bg-white text-rose-700 border border-rose-200"
@@ -259,9 +274,9 @@ function OrderCard({ order, cashMethodId, upiMethodId }: { order: SalesOrder; ca
 
       {!isDelivered && (
         <button
-          disabled={remaining > 0 || deliverMutation.isPending}
+          disabled={preparing || remaining > 0 || deliverMutation.isPending}
           onClick={() => deliverMutation.mutate(undefined)}
-          title={remaining > 0 ? "Collect the payment above first" : ""}
+          title={preparing ? "Wait until the kitchen marks it ready" : remaining > 0 ? "Collect the payment above first" : ""}
           className="w-full bg-brand-600 text-white font-bold text-sm py-3 rounded-lg disabled:opacity-40 [touch-action:manipulation]"
         >
           {deliverMutation.isPending ? "Marking…" : "Mark Delivered"}
@@ -287,7 +302,9 @@ export function RiderDashboard() {
       const qs = params.toString();
       return api.get<{ orders: SalesOrder[] }>(`/orders/rider/mine${qs ? `?${qs}` : ""}`);
     },
-    refetchInterval: 15_000,
+    // Fast poll, also in a background tab, so a newly assigned delivery shows up within seconds.
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
   });
 
   const { data: pmData } = useQuery({
@@ -297,7 +314,28 @@ export function RiderDashboard() {
   const cashMethodId = pmData?.methods.find((m) => m.type === "CASH")?.id ?? pmData?.methods[0]?.id ?? "";
   const upiMethodId = pmData?.methods.find((m) => m.name === "UPI")?.id ?? pmData?.methods.find((m) => m.type === "ONLINE")?.id ?? "";
 
-  const orders = data?.orders ?? [];
+  // Ready-to-pick-up first, then still-preparing, then delivered; oldest first within each.
+  const rank = (o: SalesOrder) => (o.status !== "OUT_FOR_DELIVERY" ? 2 : o.kitchen_status === "READY" ? 0 : 1);
+  const orders = [...(data?.orders ?? [])].sort(
+    (a, b) => rank(a) - rank(b) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+
+  // Beep when a new delivery is assigned, or when the kitchen finishes one (ready to pick up).
+  const known = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const now = new Map(data.orders.filter((o) => o.status === "OUT_FOR_DELIVERY").map((o) => [o.id, o.kitchen_status]));
+    if (known.current) {
+      for (const [id, k] of now) {
+        const before = known.current.get(id);
+        if (before === undefined || (before === "PENDING" && k === "READY")) {
+          playChime();
+          break;
+        }
+      }
+    }
+    known.current = now;
+  }, [data]);
 
   // Group into date sections so today's and yesterday's deliveries don't
   // blur together — a rider can otherwise scroll a long list with no idea

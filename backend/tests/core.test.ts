@@ -375,14 +375,15 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-01";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    // New delivery orders wait in Kitchen -> Packing; packing assigns the rider.
-    expect(order.status).toBe("CONFIRMED");
-    expect(order.assigned_rider_id).toBeNull();
+    // A rider exists when the order is created, so it goes to the kitchen and a rider together.
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
+    expect(order.kitchen_status).toBe("PENDING");
+    expect(order.assigned_rider_id).toBeTruthy();
     const dispatched = await assignRider(order.id, rider, ADMIN);
-    expect(dispatched.status).toBe("OUT_FOR_DELIVERY");
     expect(dispatched.assigned_rider_id).toBe(rider);
     expect(order.payment_status).toBe("UNPAID");
 
+    await markKitchenReady(order.id, ADMIN); // rider can only deliver once the kitchen has marked it ready
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
 
     const cashBefore = (await getCashLedgerSummary(date)).expectedCashPaise;
@@ -404,6 +405,7 @@ describe("Delivery + COD payment flow", () => {
     // explicitly for a deterministic assertion below.
     await assignRider(order.id, rider, ADMIN);
 
+    await markKitchenReady(order.id, ADMIN); // rider can only deliver once the kitchen has marked it ready
     const paid = await recordPayment(order.id, [{ paymentMethodId: ONLINE, amountPaise: 50000 }], ADMIN, "ADMIN");
     expect(paid.payment_status).toBe("PAID");
 
@@ -417,6 +419,7 @@ describe("Delivery + COD payment flow", () => {
     const order = await makeDeliveryOrder(date, 50000);
     await assignRider(order.id, rider, ADMIN);
 
+    await markKitchenReady(order.id, ADMIN); // rider can only deliver once the kitchen has marked it ready
     const afterOnline = await recordPayment(order.id, [{ paymentMethodId: ONLINE, amountPaise: 20000 }], ADMIN, "ADMIN");
     expect(afterOnline.payment_status).toBe("PARTIAL");
 
@@ -446,29 +449,41 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-05";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    expect(order.status).toBe("CONFIRMED");
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
     await assignRider(order.id, rider, ADMIN);
 
+    await markKitchenReady(order.id, ADMIN); // rider can only deliver once the kitchen has marked it ready
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
     expect((await getOrderFull(order.id)).status).toBe("OUT_FOR_DELIVERY");
   });
 
-  it("TEST 6 — Kitchen Ready on a delivery order hands it to a rider; undo pulls it back", async () => {
-    const rider = await makeUser("RIDER");
+  it("TEST 6 — Delivery goes to kitchen and rider together; Ready keeps the rider; undo only reopens the ticket", async () => {
+    await makeUser("RIDER");
     const order = await makeDeliveryOrder("2020-05-06");
-    expect(order.status).toBe("CONFIRMED");
+    expect(order.status).toBe("OUT_FOR_DELIVERY");
     expect(order.kitchen_status).toBe("PENDING");
+    const riderId = order.assigned_rider_id;
+    expect(riderId).toBeTruthy();
 
     const { order: ready, dispatchWarning } = await markKitchenReady(order.id, ADMIN);
     expect(dispatchWarning).toBeNull();
     expect(ready.kitchen_status).toBe("READY");
-    expect(ready.status).toBe("OUT_FOR_DELIVERY");
-    expect(ready.assigned_rider_id).toBeTruthy();
-    expect(rider).toBeTruthy();
+    expect(ready.assigned_rider_id).toBe(riderId);
 
     const undone = await undoKitchenReady(order.id, ADMIN);
     expect(undone.kitchen_status).toBe("PENDING");
-    expect(undone.status).toBe("CONFIRMED");
-    expect(undone.assigned_rider_id).toBeNull();
+    expect(undone.assigned_rider_id).toBe(riderId);
+  });
+
+  it("TEST 7 — A rider can't deliver while the kitchen is still preparing", async () => {
+    const rider = await makeUser("RIDER");
+    const order = await makeDeliveryOrder("2020-05-07");
+    await assignRider(order.id, rider, ADMIN);
+    await recordPayment(order.id, [{ paymentMethodId: ONLINE, amountPaise: 50000 }], ADMIN, "ADMIN");
+
+    await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(/kitchen is still preparing/);
+    await markKitchenReady(order.id, ADMIN);
+    const { order: delivered } = await markDelivered(order.id, rider, "RIDER");
+    expect(delivered.status).toBe("COMPLETED");
   });
 });

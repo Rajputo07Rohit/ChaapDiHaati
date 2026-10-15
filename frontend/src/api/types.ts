@@ -131,6 +131,8 @@ export interface SalesOrder {
   payment_status: PaymentStatus;
   kitchen_status: "PENDING" | "READY";
   packed_at: string | null;
+  kitchen_ready_at: string | null;
+  kitchen_removed_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;

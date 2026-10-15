@@ -45,8 +45,18 @@ ordersRouter.get(
       businessDate: req.query.businessDate as string | undefined,
       limit: req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 1, 1), 500) : undefined,
       before: req.query.before as string | undefined,
+      lite: req.query.lite === "1",
     });
     res.json({ orders });
+  })
+);
+
+ordersRouter.get(
+  "/kitchen",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (_req, res) => {
+    res.json({ orders: await ordersService.listKitchenOrders() });
   })
 );
 
@@ -191,6 +201,16 @@ ordersRouter.post(
   asyncHandler(async (req, res) => {
     const { order, dispatchWarning } = await ordersService.markKitchenReady(req.params.id, req.user!.id);
     res.json({ order: await ordersService.getOrderFull(order.id), dispatchWarning });
+  })
+);
+
+ordersRouter.post(
+  "/:id/kitchen-remove",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const order = await ordersService.removeFromKitchen(req.params.id, req.user!.id);
+    res.json({ order: await ordersService.getOrderFull(order.id) });
   })
 );
 

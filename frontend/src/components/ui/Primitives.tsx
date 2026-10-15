@@ -144,6 +144,11 @@ export function StockBadge({ status }: { status: string }) {
   return <Badge tone={m.tone}>{m.label}</Badge>;
 }
 
+/** A delivery order is handed to a rider as soon as it reaches the kitchen, but it only counts as "out for delivery" once the kitchen taps Ready. */
+export function effectiveOrderStatus(order: { status: string; kitchen_status?: string; order_type?: string }): string {
+  return order.status === "OUT_FOR_DELIVERY" && order.kitchen_status === "PENDING" ? "PREPARING" : order.status;
+}
+
 export function OrderStatusBadge({ status }: { status: string }) {
   const map: Record<string, "default" | "green" | "red" | "yellow" | "blue" | "gray"> = {
     DRAFT: "gray",

@@ -101,10 +101,12 @@ describe("Customer DELIVERY order -> rider visibility chain", () => {
       "+919812300000"
     );
 
-    // Staff accepts first (without picking a rider yet) — still a valid path.
+    // Accepting a delivery order hands it to a rider and the kitchen together.
     const accepted = await acceptOrder(order.id, "staff-admin");
-    expect(accepted.status).toBe("CONFIRMED");
+    expect(accepted.status).toBe("OUT_FOR_DELIVERY");
+    expect(accepted.assigned_rider_id).toBeTruthy();
 
+    // Staff can still reassign it to a specific rider.
     const assigned = await assignRider(order.id, riderId, "staff-admin");
     expect(assigned.status).toBe("OUT_FOR_DELIVERY");
     expect(assigned.assigned_rider_id).toBe(riderId);

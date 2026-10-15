@@ -36,6 +36,8 @@ export interface OrderRow {
   payment_status: PaymentStatus;
   kitchen_status: "PENDING" | "READY";
   packed_at: string | null;
+  kitchen_ready_at: string | null;
+  kitchen_removed_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;
@@ -72,6 +74,8 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     payment_status: doc.paymentStatus,
     kitchen_status: doc.kitchenStatus,
     packed_at: doc.packedAt ?? null,
+    kitchen_ready_at: doc.kitchenReadyAt ?? null,
+    kitchen_removed_at: doc.kitchenRemovedAt ?? null,
     customer_name: doc.customerName,
     customer_phone: doc.customerPhone,
     delivery_address: doc.deliveryAddress,
@@ -162,27 +166,50 @@ export async function getOrderFull(id: string) {
   return { ...toOrderRow(doc), items: doc.items.map(toItemRow), payments: await toPaymentRows(doc.payments) };
 }
 
-export async function listOrders(
-  filters: { status?: string | string[]; businessDate?: string; limit?: number; before?: string } = {}
-): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>>; items: ReturnType<typeof toItemRow>[] })[]> {
-  const query: Record<string, unknown> = {};
-  if (filters.status) query.status = Array.isArray(filters.status) ? { $in: filters.status } : filters.status;
-  if (filters.businessDate) query.businessDate = filters.businessDate;
-  // Cursor for infinite scroll: the createdAt of the last order already loaded.
-  if (filters.before) query.createdAt = { $lt: filters.before };
-  let q = Order.find(query).sort({ createdAt: -1 });
-  if (filters.limit) q = q.limit(filters.limit);
-  const docs = await q;
-
-  // One batched PaymentMethod lookup for the whole list, instead of one
-  // per order — matters once this is returning up to 100 rows at a time.
-  const allMethodIds = [...new Set(docs.flatMap((d) => d.payments.filter((p) => p.status === "ACTIVE").map((p) => p.paymentMethodId)))];
-  const methods = await PaymentMethod.find({ _id: { $in: allMethodIds } });
-  const methodById = new Map(methods.map((m) => [m._id, m]));
+/**
+ * The kitchen board's feed: only tickets that still need action — orders the
+ * kitchen hasn't marked ready, plus tickets marked ready in the last 6 hours
+ * that haven't been removed yet. The kitchen screen polls this every few
+ * seconds, so it must stay tiny and fast (never "the latest N orders").
+ */
+export async function listKitchenOrders() {
+  const sixHoursAgo = new Date(Date.now() - 6 * 3_600_000).toISOString();
+  const docs = (await Order.find({
+    status: { $nin: ["CANCELLED", "REFUNDED", "PENDING_ACCEPTANCE", "DRAFT"] },
+    $or: [
+      { kitchenStatus: "PENDING" },
+      { kitchenStatus: "READY", kitchenRemovedAt: null, kitchenReadyAt: { $gte: sixHoursAgo } },
+    ],
+  })
+    .sort({ createdAt: 1 })
+    .limit(150)
+    .lean()) as unknown as OrderDoc[];
 
   return docs.map((doc) => ({
     ...toOrderRow(doc),
     items: doc.items.map(toItemRow),
+    // Kitchen only needs amounts (for the COD / Paid badge) — skip the per-method lookup.
+    payments: doc.payments
+      .filter((p) => p.status === "ACTIVE")
+      .map((p) => ({
+        id: p._id,
+        payment_method_id: p.paymentMethodId,
+        payment_method_name: "",
+        payment_method_type: "CASH" as "CASH" | "ONLINE",
+        amount_paise: p.amountPaise,
+      })),
+  }));
+}
+
+/** Maps order docs to API rows with ONE batched PaymentMethod lookup for the whole list. `lite` drops the (heavy) item lines. */
+async function toOrderRowsWithPayments(docs: OrderDoc[], lite = false) {
+  const allMethodIds = [...new Set(docs.flatMap((d) => d.payments.filter((p) => p.status === "ACTIVE").map((p) => p.paymentMethodId)))];
+  const methods = await PaymentMethod.find({ _id: { $in: allMethodIds } }).lean();
+  const methodById = new Map(methods.map((m) => [m._id, m]));
+
+  return docs.map((doc) => ({
+    ...toOrderRow(doc),
+    items: lite ? [] : doc.items.map(toItemRow),
     payments: doc.payments
       .filter((p) => p.status === "ACTIVE")
       .map((p) => {
@@ -196,6 +223,22 @@ export async function listOrders(
         };
       }),
   }));
+}
+
+export async function listOrders(
+  filters: { status?: string | string[]; businessDate?: string; limit?: number; before?: string; lite?: boolean } = {}
+): Promise<(OrderRow & { payments: Awaited<ReturnType<typeof toPaymentRows>>; items: ReturnType<typeof toItemRow>[] })[]> {
+  const query: Record<string, unknown> = {};
+  if (filters.status) query.status = Array.isArray(filters.status) ? { $in: filters.status } : filters.status;
+  if (filters.businessDate) query.businessDate = filters.businessDate;
+  // Cursor for infinite scroll: the createdAt of the last order already loaded.
+  if (filters.before) query.createdAt = { $lt: filters.before };
+  let q = Order.find(query).sort({ createdAt: -1 });
+  // The Orders table never shows item lines (the detail view loads them), so skip them there.
+  if (filters.lite) q = q.select("-items -discounts");
+  if (filters.limit) q = q.limit(filters.limit);
+  const docs = (await q.lean()) as unknown as OrderDoc[];
+  return toOrderRowsWithPayments(docs, filters.lite);
 }
 
 /**
@@ -429,9 +472,11 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
   const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(resolvedItems, orderDiscountType, orderDiscountValue);
 
   const now = nowIso();
-  // Delivery orders are NOT auto-dispatched on creation: they start CONFIRMED
-  // and follow Kitchen -> Packing, where a rider is picked and the order goes out.
-  const status: OrderStatus = input.asDraft ? "DRAFT" : "CONFIRMED";
+  // A delivery order goes to the kitchen AND to a rider at the same moment, so the
+  // rider can head over while it's cooked. (Customers still see "preparing" until
+  // the kitchen taps Ready; the rider app shows "being prepared" too.)
+  const autoAssignedRiderId = input.orderType === "DELIVERY" && !input.asDraft ? await pickLeastBusyRider() : null;
+  const status: OrderStatus = input.asDraft ? "DRAFT" : autoAssignedRiderId ? "OUT_FOR_DELIVERY" : "CONFIRMED";
 
   const orderId = await withTransaction(async (session) => {
     const orderNumber = await nextSequence("order_number", session);
@@ -464,7 +509,7 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
           customerName: input.customerName ?? null,
           customerPhone: input.customerPhone ?? null,
           deliveryAddress: input.deliveryAddress ?? null,
-          assignedRiderId: null,
+          assignedRiderId: autoAssignedRiderId,
           subtotalPaise: subtotal,
           discountPaise: orderDiscountPaise,
           discountType: orderDiscountType,
@@ -495,6 +540,21 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
       },
       session
     );
+
+    if (autoAssignedRiderId) {
+      await recordAudit(
+        {
+          userId,
+          action: "RIDER_ASSIGNED",
+          entityType: "sales_order",
+          entityId: newOrderId,
+          oldValue: { assignedRiderId: null },
+          newValue: { assignedRiderId: autoAssignedRiderId, auto: true },
+          reason: "Auto-assigned to the least-busy active rider as the order went to the kitchen",
+        },
+        session
+      );
+    }
 
     return newOrderId;
   });
@@ -677,6 +737,16 @@ export async function acceptOrder(orderId: string, userId: string, prepTimeMinut
     oldValue: { status: "PENDING_ACCEPTANCE" },
     newValue: { status: "CONFIRMED" },
   });
+
+  // Web delivery order accepted -> kitchen and rider are notified together.
+  // No rider available just leaves it CONFIRMED; the kitchen's Ready tap retries.
+  if (order.orderType === "DELIVERY" && !order.assignedRiderId) {
+    try {
+      await assignRider(orderId, undefined, userId);
+    } catch {
+      /* no active rider yet — handled when the kitchen marks it ready */
+    }
+  }
 
   return getOrderOrThrow(orderId);
 }
@@ -1028,7 +1098,8 @@ export async function markKitchenReady(orderId: string, userId: string): Promise
   if (order.kitchenStatus !== "READY") {
     const now = nowIso();
     order.kitchenStatus = "READY";
-    order.packedAt = now;
+    order.kitchenReadyAt = now;
+    order.kitchenRemovedAt = null;
     order.updatedAt = now;
     await order.save();
     await recordAudit({
@@ -1053,9 +1124,33 @@ export async function markKitchenReady(orderId: string, userId: string): Promise
 }
 
 /**
- * Undo for a mis-tapped Ready. A delivery order that has already been handed
- * to a rider is pulled back (rider unassigned) as long as it hasn't been
- * delivered or completed.
+ * Clears a ready ticket off the kitchen board. Only possible once the
+ * kitchen has marked the order ready — the Remove button is disabled until then.
+ */
+export async function removeFromKitchen(orderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.kitchenStatus !== "READY") throw new ConflictError("Mark the order ready before removing it from the kitchen.");
+  if (order.kitchenRemovedAt) return toOrderRow(order);
+
+  order.kitchenRemovedAt = nowIso();
+  order.updatedAt = order.kitchenRemovedAt;
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "ORDER_KITCHEN_REMOVED",
+    entityType: "sales_order",
+    entityId: orderId,
+    newValue: { kitchenRemovedAt: order.kitchenRemovedAt },
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
+ * Undo for a mis-tapped Ready: puts the ticket back on the kitchen board. The
+ * rider assignment is left as it is.
  */
 export async function undoKitchenReady(orderId: string, userId: string): Promise<OrderRow> {
   const order = await Order.findById(orderId);
@@ -1070,11 +1165,8 @@ export async function undoKitchenReady(orderId: string, userId: string): Promise
 
   const oldRiderId = order.assignedRiderId;
   order.kitchenStatus = "PENDING";
-  order.packedAt = null;
-  if (order.orderType === "DELIVERY" && order.status === "OUT_FOR_DELIVERY") {
-    order.status = "CONFIRMED";
-    order.assignedRiderId = null;
-  }
+  order.kitchenReadyAt = null;
+  order.kitchenRemovedAt = null;
   order.updatedAt = nowIso();
   await order.save();
 
@@ -1109,6 +1201,12 @@ export async function markDelivered(
   }
   if (role === "RIDER" && order.assignedRiderId !== userId) {
     throw new ForbiddenError("This order isn't assigned to you.");
+  }
+  // The rider is assigned while the food is still being cooked; they can't close the delivery
+  // before the kitchen marks it ready. (Orders older than 3h are never blocked, so a ticket the
+  // kitchen forgot can't trap a rider.)
+  if (role === "RIDER" && order.kitchenStatus === "PENDING" && Date.now() - new Date(order.createdAt).getTime() < 3 * 3_600_000) {
+    throw new ConflictError("The kitchen is still preparing this order.");
   }
   if (order.paymentStatus !== "PAID") {
     const paid = order.payments.filter((p) => p.status === "ACTIVE").reduce((s, p) => s + p.amountPaise, 0);
@@ -1237,10 +1335,8 @@ export async function listOrdersForRider(riderId: string, includeAll = false, bu
   // delivered too" toggle, since a past date's orders are usually done.
   if (!includeAll && !businessDate) query.status = "OUT_FOR_DELIVERY";
   if (businessDate) query.businessDate = businessDate;
-  const docs = await Order.find(query).sort({ createdAt: -1 });
-  return Promise.all(
-    docs.map(async (o) => ({ ...toOrderRow(o), items: o.items.map(toItemRow), payments: await toPaymentRows(o.payments) }))
-  );
+  const docs = (await Order.find(query).sort({ createdAt: -1 }).lean()) as unknown as OrderDoc[];
+  return toOrderRowsWithPayments(docs);
 }
 
 export async function listRiders() {

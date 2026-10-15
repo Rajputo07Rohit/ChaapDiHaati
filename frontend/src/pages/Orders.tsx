@@ -7,7 +7,7 @@ import { api, ApiError } from "../api/client";
 import { PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
-import { Button, Card, EmptyState, Input, KitchenStatusBadge, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
+import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
 import { customerNoteOf } from "../components/PaymentModeBanner";
 import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
@@ -26,6 +26,45 @@ function paymentModeLabel(order: SalesOrder): string {
   if (types.size > 1) return "Mixed";
   const names = [...new Set(payments.map((p) => p.payment_method_name))];
   return names.join(" + ");
+}
+
+const LATE_DELIVERY_MINUTES = 45;
+
+/** Delivery progress for the Orders table: delivered (with how long it took), on the way (turns red when late), or no rider yet. */
+function DeliveryProgress({ order }: { order: SalesOrder }) {
+  if (order.order_type !== "DELIVERY" || ["CANCELLED", "REFUNDED", "DRAFT", "PENDING_ACCEPTANCE"].includes(order.status)) {
+    return <span className="text-slate-300">—</span>;
+  }
+  const created = new Date(order.created_at).getTime();
+  if (order.delivered_at) {
+    const mins = Math.max(0, Math.round((new Date(order.delivered_at).getTime() - created) / 60000));
+    return (
+      <span className="inline-flex flex-col leading-tight">
+        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">✓ Delivered</span>
+        <span className={`mt-0.5 text-[11px] font-medium ${mins > LATE_DELIVERY_MINUTES ? "text-rose-600" : "text-slate-500"}`}>in {mins} min</span>
+      </span>
+    );
+  }
+  if (order.status === "COMPLETED") {
+    // Completed at the counter / before delivery tracking existed.
+    return <span className="text-slate-400 text-xs">Completed</span>;
+  }
+  const waiting = Math.max(0, Math.floor((Date.now() - created) / 60000));
+  const late = waiting > LATE_DELIVERY_MINUTES;
+  const label = !order.assigned_rider_id ? "No rider" : order.kitchen_status === "READY" ? "On the way" : "Preparing";
+  return (
+    <span className="inline-flex flex-col leading-tight">
+      <span
+        className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-bold ${
+          late ? "bg-rose-600 text-white" : "bg-amber-100 text-amber-700"
+        }`}
+      >
+        {late ? "⚠ Late · " : ""}
+        {label}
+      </span>
+      <span className={`mt-0.5 text-[11px] font-medium ${late ? "text-rose-600" : "text-slate-500"}`}>{waiting} min so far</span>
+    </span>
+  );
 }
 
 interface DaySummary {
@@ -47,6 +86,7 @@ export function Orders() {
   const [status, setStatus] = useState("");
   const [businessDate, setBusinessDate] = useState("");
   const [paymentMode, setPaymentMode] = useState<"" | "CASH" | "ONLINE">("");
+  const [deliveryFilter, setDeliveryFilter] = useState<"" | "DONE" | "PENDING" | "LATE">("");
   const [selected, setSelected] = useState<SalesOrder | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelTarget, setCancelTarget] = useState<SalesOrder | null>(null);
@@ -76,7 +116,7 @@ export function Orders() {
     queryKey: ["orders-day-summary", businessDate],
     queryFn: () =>
       api.get<{ summary: DaySummary }>(`/orders/day-summary${businessDate ? `?businessDate=${businessDate}` : ""}`),
-    refetchInterval: 15_000,
+    refetchInterval: 10_000,
   });
   const summary = summaryData?.summary;
 
@@ -87,7 +127,7 @@ export function Orders() {
     queryKey: ["orders", status, businessDate],
     initialPageParam: "" as string,
     queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), lite: "1" });
       if (status) params.set("status", status);
       if (businessDate) params.set("businessDate", businessDate);
       if (pageParam) params.set("before", pageParam);
@@ -97,7 +137,8 @@ export function Orders() {
       lastPage.orders.length < PAGE_SIZE ? undefined : lastPage.orders[lastPage.orders.length - 1].created_at,
     // Polling re-fetches every loaded page, so stop once the user has scrolled
     // deep into history (they're reading old orders, not watching live ones).
-    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 2 ? false : 15_000),
+    refetchInterval: (query) => ((query.state.data?.pages.length ?? 0) > 2 ? false : 5_000),
+    refetchIntervalInBackground: true,
   });
   const allOrders = data?.pages.flatMap((p) => p.orders) ?? [];
 
@@ -116,9 +157,16 @@ export function Orders() {
     return () => obs.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, allOrders.length]);
 
-  const filteredOrders = allOrders.filter(
-    (o) => !paymentMode || (o.payments ?? []).some((p) => p.payment_method_type === paymentMode)
-  );
+  const isDeliveryOpen = (o: SalesOrder) =>
+    o.order_type === "DELIVERY" && !o.delivered_at && !["CANCELLED", "REFUNDED", "COMPLETED", "DRAFT", "PENDING_ACCEPTANCE"].includes(o.status);
+  const filteredOrders = allOrders
+    .filter((o) => !paymentMode || (o.payments ?? []).some((p) => p.payment_method_type === paymentMode))
+    .filter((o) => {
+      if (!deliveryFilter) return true;
+      if (deliveryFilter === "DONE") return o.order_type === "DELIVERY" && !!o.delivered_at;
+      if (deliveryFilter === "PENDING") return isDeliveryOpen(o);
+      return isDeliveryOpen(o) && Date.now() - new Date(o.created_at).getTime() > LATE_DELIVERY_MINUTES * 60000;
+    });
 
   // Group into date sections so a flat 100-order list doesn't blur today's
   // orders together with yesterday's — this is purely a display grouping,
@@ -137,7 +185,7 @@ export function Orders() {
     // A rider can complete/deliver this exact order from their own phone
     // while an admin/staff has it open here watching — poll so that shows
     // up without needing a manual reload.
-    refetchInterval: 8_000,
+    refetchInterval: 4_000,
   });
 
   const [cancelNotice, setCancelNotice] = useState<CancelNotice | null>(null);
@@ -308,6 +356,12 @@ export function Orders() {
                 </option>
               ))}
             </Select>
+            <Select value={deliveryFilter} onChange={(e) => setDeliveryFilter(e.target.value as "" | "DONE" | "PENDING" | "LATE")}>
+              <option value="">All deliveries</option>
+              <option value="PENDING">Delivery pending</option>
+              <option value="LATE">Delivery late ({LATE_DELIVERY_MINUTES}+ min)</option>
+              <option value="DONE">Delivered</option>
+            </Select>
             <Select value={paymentMode} onChange={(e) => setPaymentMode(e.target.value as "" | "CASH" | "ONLINE")}>
               <option value="">All payment modes</option>
               <option value="CASH">Cash</option>
@@ -346,6 +400,7 @@ export function Orders() {
                 <th className="text-left px-4 py-2.5">Type</th>
                 <th className="text-left px-4 py-2.5">Status</th>
                 <th className="text-left px-4 py-2.5">Kitchen</th>
+                <th className="text-left px-4 py-2.5">Delivery</th>
                 <th className="text-left px-4 py-2.5">Payment</th>
                 <th className="text-left px-4 py-2.5">Mode</th>
                 <th className="text-right px-4 py-2.5">Total</th>
@@ -356,7 +411,7 @@ export function Orders() {
               {ordersByDate.map(([date, dateOrders], dayIndex) => (
                 <Fragment key={date}>
                   <tr key={`hdr-${date}`}>
-                    <td colSpan={10} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
+                    <td colSpan={11} className="sticky top-0 z-10 bg-slate-800 px-4 py-2 text-sm font-bold text-white">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <Calendar size={14} />
@@ -394,10 +449,13 @@ export function Orders() {
                   <td className="px-4 py-2.5 text-slate-500 tabular-nums">{toDdMmYyyy(o.business_date)}</td>
                   <td className="px-4 py-2.5"><OrderTypeBadge type={o.order_type} /></td>
                   <td className="px-4 py-2.5">
-                    <OrderStatusBadge status={o.status} />
+                    <OrderStatusBadge status={effectiveOrderStatus(o)} />
                   </td>
                   <td className="px-4 py-2.5">
                     {["CANCELLED", "REFUNDED"].includes(o.status) ? <span className="text-slate-300">—</span> : <KitchenStatusBadge status={o.kitchen_status} />}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <DeliveryProgress order={o} />
                   </td>
                   <td className="px-4 py-2.5">
                     <PaymentStatusBadge status={o.payment_status} />
@@ -468,7 +526,7 @@ export function Orders() {
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
-                <OrderStatusBadge status={detail.order.status} />
+                <OrderStatusBadge status={effectiveOrderStatus(detail.order)} />
                 {!["CANCELLED", "REFUNDED"].includes(detail.order.status) && <KitchenStatusBadge status={detail.order.kitchen_status} />}
                 <PaymentStatusBadge status={detail.order.payment_status} />
               </div>

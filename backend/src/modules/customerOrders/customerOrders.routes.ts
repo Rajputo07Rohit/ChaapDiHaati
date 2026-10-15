@@ -20,7 +20,9 @@ function toCustomerOrderResponse(order: OrderRow) {
     id: order.id,
     order_number: order.order_number,
     order_type: order.order_type,
-    status: order.status,
+    // A delivery order is handed to a rider as soon as it reaches the kitchen, but the
+    // customer should see "preparing" until the kitchen actually marks it ready.
+    status: order.status === "OUT_FOR_DELIVERY" && order.kitchen_status === "PENDING" ? "PREPARING" : order.status,
     payment_status: order.payment_status,
     net_total_paise: order.net_total_paise,
     subtotal_paise: order.subtotal_paise,

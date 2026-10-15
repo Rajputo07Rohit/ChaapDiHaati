@@ -153,3 +153,7 @@ body {
   filter: brightness(0.93);
 }
 
+
+/* Scrollable area with the scrollbar hidden (touch / wheel / trackpad still scroll). */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
