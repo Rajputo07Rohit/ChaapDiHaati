@@ -7,6 +7,8 @@ import {
   refundOrder,
   getOrderFull,
   assignRider,
+  markKitchenReady,
+  undoKitchenReady,
   recordPayment,
   markDelivered,
 } from "../src/modules/orders/orders.service";
@@ -449,5 +451,24 @@ describe("Delivery + COD payment flow", () => {
 
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
     expect((await getOrderFull(order.id)).status).toBe("OUT_FOR_DELIVERY");
+  });
+
+  it("TEST 6 — Kitchen Ready on a delivery order hands it to a rider; undo pulls it back", async () => {
+    const rider = await makeUser("RIDER");
+    const order = await makeDeliveryOrder("2020-05-06");
+    expect(order.status).toBe("CONFIRMED");
+    expect(order.kitchen_status).toBe("PENDING");
+
+    const { order: ready, dispatchWarning } = await markKitchenReady(order.id, ADMIN);
+    expect(dispatchWarning).toBeNull();
+    expect(ready.kitchen_status).toBe("READY");
+    expect(ready.status).toBe("OUT_FOR_DELIVERY");
+    expect(ready.assigned_rider_id).toBeTruthy();
+    expect(rider).toBeTruthy();
+
+    const undone = await undoKitchenReady(order.id, ADMIN);
+    expect(undone.kitchen_status).toBe("PENDING");
+    expect(undone.status).toBe("CONFIRMED");
+    expect(undone.assigned_rider_id).toBeNull();
   });
 });

@@ -1,12 +1,13 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock, CheckCircle2, Calendar, UtensilsCrossed, Bike } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar, UtensilsCrossed, Bike, MapPin, Phone, AlertTriangle, Undo2 } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
-import { customerNoteOf } from "../components/PaymentModeBanner";
+import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
 import { ORDER_TYPE_STYLE, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
 import { toDdMmYyyy } from "../utils/date";
+import { playChime } from "../components/WebOrderNotifier";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -29,52 +30,69 @@ function useClockTick() {
 function OrderTicket({ order }: { order: SalesOrder }) {
   const queryClient = useQueryClient();
   const age = minutesAgo(order.created_at);
-  const urgent = order.kitchen_status === "PENDING" && age >= 15;
   const ready = order.kitchen_status === "READY";
+  const late = !ready && age >= 15;
+  const warn = !ready && age >= 10 && !late;
   const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
+  const isDelivery = order.order_type === "DELIVERY" || order.order_type === "ONLINE";
 
-  // Kitchen prep is tracked independently of the order's own status —
-  // a counter sale is often already paid and COMPLETED the instant it's
-  // rung up, well before the food is actually cooked. This is the one
-  // action the kitchen screen has: flip it to ready.
+  // The chef taps Ready once the food is cooked AND packed. Delivery orders
+  // go straight to the least-busy rider in the same step; dine-in / takeaway
+  // just leave the board. The button locks while saving (no double taps) and
+  // stays locked once the ticket is ready.
   const markReadyMutation = useMutation({
-    mutationFn: () => api.post(`/orders/${order.id}/kitchen-ready`),
-    onSuccess: () => {
-      toast.success(`Order #${order.order_number} ready`);
+    mutationFn: () => api.post<{ dispatchWarning: string | null }>(`/orders/${order.id}/kitchen-ready`),
+    onSuccess: (res) => {
+      if (res.dispatchWarning) toast.error(`#${order.order_number} ready, but no rider sent: ${res.dispatchWarning}`, { duration: 8000 });
+      else toast.success(isDelivery ? `#${order.order_number} ready — sent to rider` : `#${order.order_number} ready`);
       queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
-      queryClient.invalidateQueries({ queryKey: ["orders"] }); // refreshes the Packing board too
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update order"),
   });
 
   const orderNote = customerNoteOf(order.notes);
 
-  // Deliberately lean: the kitchen only needs what to cook and any special
-  // instructions — no customer name/phone/address/payment — so more tickets
-  // fit on screen at once.
   return (
     <div
       className={`rounded-2xl border-2 border-l-8 bg-white shadow-sm overflow-hidden flex flex-col ${ORDER_TYPE_STYLE[order.order_type]?.stripe ?? ""} ${
-        ready ? "border-emerald-200 opacity-70" : urgent ? "border-rose-400" : "border-slate-200"
+        ready ? "border-emerald-200 opacity-70" : late ? "border-rose-400" : warn ? "border-amber-300" : "border-slate-200"
       }`}
     >
-      <div className={`flex items-center justify-between gap-2 px-3.5 py-2.5 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
+      <div className={`flex items-center justify-between gap-2 px-3.5 py-2.5 ${ready ? "bg-emerald-50" : late ? "bg-rose-50" : warn ? "bg-amber-50" : "bg-slate-50"}`}>
         <span className="flex items-center gap-2 min-w-0">
-          <span className="text-xl font-extrabold text-slate-900 leading-none">#{order.order_number}</span>
+          <span className="text-2xl font-extrabold text-slate-900 leading-none">#{order.order_number}</span>
           <OrderTypeBadge type={order.order_type} />
         </span>
         <span
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${
-            ready ? "bg-emerald-600 text-white" : urgent ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-600"
+          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-bold whitespace-nowrap tabular-nums ${
+            ready ? "bg-emerald-600 text-white" : late ? "bg-rose-600 text-white animate-pulse" : warn ? "bg-amber-500 text-white" : "bg-emerald-100 text-emerald-700"
           }`}
         >
-          <Clock size={13} /> {age === 0 ? "now" : `${age}m`}
+          <Clock size={14} /> {age === 0 ? "now" : `${age} min`}
         </span>
       </div>
 
-      <div className="flex-1 px-3.5 py-2.5 space-y-2">
+      <div className="px-3.5 py-2 border-b border-slate-100 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <PaymentModeBanner order={order} />
+          {order.customer_name?.trim() && <span className="text-sm font-bold text-slate-900 truncate">{order.customer_name}</span>}
+        </div>
+        {order.customer_phone && (
+          <div className="flex items-center gap-1.5 text-sm text-slate-700">
+            <Phone size={13} className="text-slate-500 shrink-0" /> {order.customer_phone}
+          </div>
+        )}
+        {isDelivery && order.delivery_address?.trim() && (
+          <div className="flex items-start gap-1.5 text-sm text-slate-800 font-medium leading-snug">
+            <MapPin size={14} className="text-orange-500 shrink-0 mt-0.5" /> {order.delivery_address}
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 px-3.5 py-2.5 divide-y divide-slate-100">
         {items.map((item) => (
-          <div key={item.id} className="flex items-start justify-between gap-2">
+          <div key={item.id} className="flex items-start justify-between gap-2 py-1.5 first:pt-0 last:pb-0">
             <div className="min-w-0 leading-snug">
               <span className="text-base font-bold text-slate-900">{item.item_name_snapshot}</span>
               {item.price_type !== "SINGLE" && <span className="text-sm text-slate-500"> ({item.price_type})</span>}
@@ -83,7 +101,7 @@ function OrderTicket({ order }: { order: SalesOrder }) {
               )}
               {item.special_instructions && <div className="text-sm text-amber-700 font-semibold">⚠ {item.special_instructions}</div>}
             </div>
-            <span className="text-xl font-extrabold text-brand-600 tabular-nums shrink-0 leading-none">×{item.quantity}</span>
+            <span className="shrink-0 rounded-lg bg-brand-50 px-2.5 py-0.5 text-xl font-extrabold tabular-nums leading-tight text-brand-700">×{item.quantity}</span>
           </div>
         ))}
       </div>
@@ -95,16 +113,17 @@ function OrderTicket({ order }: { order: SalesOrder }) {
       )}
 
       {ready ? (
-        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-sm py-2.5">
-          <CheckCircle2 size={16} /> Ready
+        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-base py-3">
+          <CheckCircle2 size={18} /> Ready
         </div>
       ) : (
         <button
-          disabled={markReadyMutation.isPending}
+          disabled={markReadyMutation.isPending || markReadyMutation.isSuccess}
           onClick={() => markReadyMutation.mutate()}
-          className="w-full bg-emerald-600 text-white font-bold text-base py-3 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
+          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-bold text-lg py-4 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
         >
-          {markReadyMutation.isPending ? "Marking…" : "Mark Ready"}
+          {isDelivery ? <Bike size={20} /> : <CheckCircle2 size={20} />}
+          {markReadyMutation.isPending || markReadyMutation.isSuccess ? "Saving…" : isDelivery ? "Ready — Send to rider" : "Ready"}
         </button>
       )}
     </div>
@@ -177,6 +196,42 @@ function KitchenSection({
   );
 }
 
+/** Orders marked ready in the last 10 minutes, with a one-tap undo for mis-taps. */
+function RecentlyReady({ orders }: { orders: SalesOrder[] }) {
+  const queryClient = useQueryClient();
+  const undo = useMutation({
+    mutationFn: (id: string) => api.post(`/orders/${id}/kitchen-undo`),
+    onSuccess: () => {
+      toast.success("Order moved back to the kitchen");
+      queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not undo"),
+  });
+  if (orders.length === 0) return null;
+  return (
+    <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+      <div className="mb-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">Recently ready</div>
+      <div className="flex flex-wrap gap-2">
+        {orders.map((o) => (
+          <span key={o.id} className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1 text-sm">
+            <CheckCircle2 size={14} className="text-emerald-600" />
+            <span className="font-bold text-slate-900">#{o.order_number}</span>
+            <OrderTypeBadge type={o.order_type} />
+            <button
+              disabled={undo.isPending}
+              onClick={() => undo.mutate(o.id)}
+              className="inline-flex items-center gap-1 font-semibold text-slate-500 hover:text-rose-600 disabled:opacity-50"
+            >
+              <Undo2 size={13} /> Undo
+            </button>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Kitchen() {
   useClockTick();
   const [businessDate, setBusinessDate] = useState(todayIso());
@@ -214,11 +269,29 @@ export function Kitchen() {
 
   const isToday = businessDate === todayIso();
 
+  // Chime when a new ticket lands (not on the first load).
+  const pendingIds = (data?.orders ?? [])
+    .filter((o) => o.kitchen_status === "PENDING" && !["CANCELLED", "REFUNDED", "PENDING_ACCEPTANCE", "DRAFT"].includes(o.status))
+    .map((o) => o.id);
+  const seen = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    const ids = new Set(pendingIds);
+    if (seen.current && [...ids].some((id) => !seen.current!.has(id))) playChime();
+    seen.current = ids;
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const lateCount = filtered.filter((o) => o.kitchen_status === "PENDING" && minutesAgo(o.created_at) >= 15).length;
+  const recentlyReady = (data?.orders ?? [])
+    .filter((o) => o.kitchen_status === "READY" && o.packed_at && minutesAgo(o.packed_at) < 10 && !["CANCELLED", "REFUNDED"].includes(o.status))
+    .filter((o) => !(o.order_type === "DELIVERY" && ["DELIVERED", "COMPLETED"].includes(o.status)))
+    .sort((a, b) => new Date(b.packed_at!).getTime() - new Date(a.packed_at!).getTime());
+
   return (
     <div>
       <PageHeader
         title="Kitchen"
-        description="Orders waiting to be prepared. Tap Mark Ready once an order is done."
+        description="Cook, pack, then tap Ready. Delivery orders go straight to a rider; dine-in and takeaway leave the board."
         actions={
           <div className="flex items-center gap-3 flex-wrap">
             <button
@@ -247,6 +320,11 @@ export function Kitchen() {
           </div>
         }
       />
+      {lateCount > 0 && !showReady && (
+        <div className="mb-3 flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-bold text-white">
+          <AlertTriangle size={16} /> {lateCount} order{lateCount > 1 ? "s" : ""} waiting over 15 minutes
+        </div>
+      )}
       {isLoading && <div className="text-center text-slate-400 py-16">Loading…</div>}
       {!isLoading && filtered.length === 0 && (
         <div className="text-center text-slate-400 py-24">
@@ -257,22 +335,23 @@ export function Kitchen() {
       {!isLoading && filtered.length > 0 && (
         <div className="flex flex-col xl:flex-row gap-6 mt-2">
           <KitchenSection
-            title="Dine-in & Takeaway"
-            icon={<UtensilsCrossed size={18} />}
-            accent="bg-blue-600"
-            orders={dineInTakeaway}
-            emptyLabel={showReady ? "No dine-in/takeaway orders that day." : "No dine-in/takeaway orders waiting."}
-          />
-          <div className="hidden xl:block w-px bg-slate-200" />
-          <KitchenSection
             title="Delivery"
             icon={<Bike size={18} />}
             accent="bg-orange-600"
             orders={delivery}
             emptyLabel={showReady ? "No delivery orders that day." : "No delivery orders waiting."}
           />
+          <div className="hidden xl:block w-px bg-slate-200" />
+          <KitchenSection
+            title="Dine-in & Takeaway"
+            icon={<UtensilsCrossed size={18} />}
+            accent="bg-blue-600"
+            orders={dineInTakeaway}
+            emptyLabel={showReady ? "No dine-in/takeaway orders that day." : "No dine-in/takeaway orders waiting."}
+          />
         </div>
       )}
+      {!showReady && <RecentlyReady orders={recentlyReady} />}
     </div>
   );
 }

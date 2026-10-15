@@ -23,7 +23,7 @@ export function usePendingCount() {
 }
 
 /** One soft chime for the whole queue (not one per order). */
-function playChime() {
+export function playChime() {
   try {
     const Ctx = window.AudioContext || (window as any).webkitAudioContext;
     const ctx = new Ctx();

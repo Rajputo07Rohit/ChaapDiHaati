@@ -1010,52 +1010,81 @@ export async function updateOrderStatus(orderId: string, status: OrderStatus, us
 }
 
 /**
- * The kitchen's one action: flips kitchenStatus to READY. Deliberately does
- * not touch `status`/`paymentStatus` — a counter sale may already be
- * COMPLETED (paid, stock deducted) well before the food is actually
- * cooked, so this tracks kitchen prep as a separate concern entirely.
+ * The kitchen's one action, tapped once the food is cooked AND packed.
+ * Flips kitchenStatus to READY (independent of the order's own
+ * status/payment lifecycle — a counter sale may already be COMPLETED). For a
+ * DELIVERY order it also hands the order to the least-busy rider in the same
+ * step (-> OUT_FOR_DELIVERY), so nobody has to remember a second click. If no
+ * rider can be assigned the order still becomes READY and `dispatchWarning`
+ * says why, so staff can pick a rider by hand from Orders.
  */
-export async function markKitchenReady(orderId: string, userId: string): Promise<OrderRow> {
+export async function markKitchenReady(orderId: string, userId: string): Promise<{ order: OrderRow; dispatchWarning: string | null }> {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError("Order");
-  if (order.kitchenStatus === "READY") return toOrderRow(order);
+  if (order.status === "CANCELLED" || order.status === "REFUNDED" || order.status === "PENDING_ACCEPTANCE" || order.status === "DRAFT") {
+    throw new ConflictError(`Cannot mark an order that is ${order.status.toLowerCase().replace(/_/g, " ")} as ready.`);
+  }
 
-  order.kitchenStatus = "READY";
+  if (order.kitchenStatus !== "READY") {
+    const now = nowIso();
+    order.kitchenStatus = "READY";
+    order.packedAt = now;
+    order.updatedAt = now;
+    await order.save();
+    await recordAudit({
+      userId,
+      action: "ORDER_KITCHEN_READY",
+      entityType: "sales_order",
+      entityId: orderId,
+      newValue: { kitchenStatus: "READY" },
+    });
+  }
+
+  let dispatchWarning: string | null = null;
+  if (order.orderType === "DELIVERY" && !order.assignedRiderId && ["CONFIRMED", "PREPARING", "READY"].includes(order.status)) {
+    try {
+      await assignRider(orderId, undefined, userId);
+    } catch (err) {
+      dispatchWarning = err instanceof Error ? err.message : "Could not assign a rider.";
+    }
+  }
+
+  return { order: await getOrderOrThrow(orderId), dispatchWarning };
+}
+
+/**
+ * Undo for a mis-tapped Ready. A delivery order that has already been handed
+ * to a rider is pulled back (rider unassigned) as long as it hasn't been
+ * delivered or completed.
+ */
+export async function undoKitchenReady(orderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.kitchenStatus !== "READY") return toOrderRow(order);
+  if (order.orderType === "DELIVERY" && ["DELIVERED", "COMPLETED"].includes(order.status)) {
+    throw new ConflictError("This delivery has already been completed.");
+  }
+  if (order.status === "CANCELLED" || order.status === "REFUNDED") {
+    throw new ConflictError(`Cannot reopen an order that is ${order.status.toLowerCase()}.`);
+  }
+
+  const oldRiderId = order.assignedRiderId;
+  order.kitchenStatus = "PENDING";
+  order.packedAt = null;
+  if (order.orderType === "DELIVERY" && order.status === "OUT_FOR_DELIVERY") {
+    order.status = "CONFIRMED";
+    order.assignedRiderId = null;
+  }
   order.updatedAt = nowIso();
   await order.save();
 
   await recordAudit({
     userId,
-    action: "ORDER_KITCHEN_READY",
+    action: "ORDER_KITCHEN_READY_UNDONE",
     entityType: "sales_order",
     entityId: orderId,
-    newValue: { kitchenStatus: "READY" },
-  });
-
-  return getOrderOrThrow(orderId);
-}
-
-/**
- * Packing's action for dine-in / takeaway orders: packed and handed over.
- * Delivery orders are packed via assignRider (which also stamps packedAt).
- * Only allowed once the kitchen has marked the order ready.
- */
-export async function markPacked(orderId: string, userId: string): Promise<OrderRow> {
-  const order = await Order.findById(orderId);
-  if (!order) throw new NotFoundError("Order");
-  if (order.packedAt) return toOrderRow(order);
-  if (order.kitchenStatus !== "READY") throw new ConflictError("The kitchen hasn't marked this order ready yet.");
-
-  order.packedAt = nowIso();
-  order.updatedAt = order.packedAt;
-  await order.save();
-
-  await recordAudit({
-    userId,
-    action: "ORDER_PACKED",
-    entityType: "sales_order",
-    entityId: orderId,
-    newValue: { packedAt: order.packedAt },
+    oldValue: { assignedRiderId: oldRiderId },
+    newValue: { kitchenStatus: "PENDING" },
   });
 
   return getOrderOrThrow(orderId);

@@ -189,18 +189,17 @@ ordersRouter.post(
   requireAuth,
   isAnyRole,
   asyncHandler(async (req, res) => {
-    const order = await ordersService.markKitchenReady(req.params.id, req.user!.id);
-    res.json({ order: await ordersService.getOrderFull(order.id) });
+    const { order, dispatchWarning } = await ordersService.markKitchenReady(req.params.id, req.user!.id);
+    res.json({ order: await ordersService.getOrderFull(order.id), dispatchWarning });
   })
 );
 
-// Packing's action for dine-in / takeaway: packed and handed over.
 ordersRouter.post(
-  "/:id/packed",
+  "/:id/kitchen-undo",
   requireAuth,
   isAnyRole,
   asyncHandler(async (req, res) => {
-    const order = await ordersService.markPacked(req.params.id, req.user!.id);
+    const order = await ordersService.undoKitchenReady(req.params.id, req.user!.id);
     res.json({ order: await ordersService.getOrderFull(order.id) });
   })
 );
