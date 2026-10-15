@@ -28,12 +28,15 @@ function PackingCard({ order }: { order: SalesOrder }) {
 
   // Packed = out for delivery. The server picks the rider with the fewest
   // open deliveries and the order shows up on their phone immediately.
+  const isDelivery = order.order_type === "DELIVERY";
   const dispatch = useMutation({
-    mutationFn: () => api.post<{ riderName: string | null }>(`/orders/${order.id}/assign-rider`, {}),
+    mutationFn: () =>
+      isDelivery
+        ? api.post<{ riderName: string | null }>(`/orders/${order.id}/assign-rider`, {})
+        : api.post<{ riderName: string | null }>(`/orders/${order.id}/packed`, {}),
     onSuccess: (res) => {
-      toast.success(`Order #${order.order_number} sent to ${res.riderName ?? "a rider"}`);
-      queryClient.invalidateQueries({ queryKey: ["packing-orders"] });
-      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      toast.success(isDelivery ? `Order #${order.order_number} sent to ${res.riderName ?? "a rider"}` : `Order #${order.order_number} packed`);
+            queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not send order out"),
   });
@@ -44,31 +47,37 @@ function PackingCard({ order }: { order: SalesOrder }) {
         cooked ? "border-emerald-300" : "border-slate-200 opacity-80"
       }`}
     >
-      <div className={`flex items-center justify-between px-4 py-3 ${cooked ? "bg-emerald-50" : "bg-slate-50"}`}>
-        <span className="flex items-center gap-2 text-xl font-extrabold text-slate-900">#{order.order_number} <OrderTypeBadge type={order.order_type} /> <PaymentModeBanner order={order} /></span>
+      <div className={`flex items-center justify-between gap-2 px-4 py-3 ${cooked ? "bg-emerald-50" : "bg-slate-50"}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-2xl font-extrabold leading-none text-slate-900">#{order.order_number}</span>
+          <OrderTypeBadge type={order.order_type} />
+        </div>
         <span
-          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
+          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1 rounded-full text-xs font-bold uppercase ${
             cooked ? "bg-emerald-600 text-white" : "bg-amber-100 text-amber-700"
           }`}
         >
           {cooked ? (
             <>
-              <Package size={12} /> Ready to pack
+              <Package size={13} /> Ready
             </>
           ) : (
             <>
-              <ChefHat size={12} /> In kitchen
+              <ChefHat size={13} /> In kitchen
             </>
           )}
         </span>
       </div>
 
-      <div className="px-4 py-2 border-b border-slate-100 space-y-1.5">
-        <div className="flex items-center justify-between text-sm">
-          <span className="inline-flex items-center gap-1 text-slate-500">
-            <Clock size={13} /> {age === 0 ? "just now" : `${age} min ago`}
-          </span>
-          <span className="font-bold tabular-nums">{formatPaise(order.net_total_paise)}</span>
+      <div className="px-4 py-3 border-b border-slate-100 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <PaymentModeBanner order={order} large />
+          <div className="text-right leading-tight">
+            <div className="text-lg font-extrabold tabular-nums text-slate-900">{formatPaise(order.net_total_paise)}</div>
+            <div className="inline-flex items-center gap-1 text-xs text-slate-500">
+              <Clock size={11} /> {age === 0 ? "just now" : `${age} min ago`}
+            </div>
+          </div>
         </div>
         {order.customer_name?.trim() && (
           <div className="flex items-center gap-1.5 text-sm font-bold text-slate-900">
@@ -90,32 +99,35 @@ function PackingCard({ order }: { order: SalesOrder }) {
         )}
       </div>
 
-      <div className="flex-1 px-4 py-3 space-y-1.5">
-        <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Pack checklist</div>
+      <div className="flex-1 px-4 py-3">
+        <div className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Pack checklist</div>
+        <div className="divide-y divide-slate-100">
         {items.map((item) => (
-          <div key={item.id} className="flex items-start justify-between gap-2">
+          <div key={item.id} className="flex items-start justify-between gap-3 py-2">
             <div>
               <span className="font-bold text-slate-900">{item.item_name_snapshot}</span>
               {item.price_type !== "SINGLE" && <span className="text-sm text-slate-500"> ({item.price_type})</span>}
               {(item.addons ?? []).length > 0 && <div className="text-sm text-slate-600">+ {item.addons.map((a) => a.name).join(", ")}</div>}
               {item.special_instructions && <div className="text-sm text-amber-700 font-medium">Note: {item.special_instructions}</div>}
             </div>
-            <span className="text-lg font-extrabold text-brand-600 tabular-nums shrink-0">×{item.quantity}</span>
+            <span className="shrink-0 rounded-lg bg-brand-50 px-2.5 py-0.5 text-base font-extrabold tabular-nums text-brand-700">×{item.quantity}</span>
           </div>
         ))}
+        </div>
         {customerNoteOf(order.notes) && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
+          <div className="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
             Special instructions: {customerNoteOf(order.notes)}
           </div>
         )}
       </div>
 
-      <div className="p-3 border-t border-slate-100 space-y-2">
+      <div className="p-3 border-t border-slate-100">
         {!cooked ? (
           <div className="text-center text-sm font-medium text-slate-500 py-1.5">Waiting for the kitchen to mark this ready.</div>
         ) : (
-          <Button className="w-full" disabled={dispatch.isPending} onClick={() => dispatch.mutate()}>
-            <Truck size={16} /> {dispatch.isPending ? "Sending…" : "Packed — Send to rider"}
+          <Button className="w-full py-3 text-base" disabled={dispatch.isPending} onClick={() => dispatch.mutate()}>
+            {isDelivery ? <Truck size={16} /> : <Package size={16} />}{" "}
+            {dispatch.isPending ? "Saving…" : isDelivery ? "Packed — Send to rider" : "Packed — Handed over"}
           </Button>
         )}
       </div>
@@ -126,14 +138,21 @@ function PackingCard({ order }: { order: SalesOrder }) {
 export function Packing() {
   useClockTick();
   const { data, isLoading } = useQuery({
-    queryKey: ["packing-orders"],
+    queryKey: ["orders", "packing"],
     queryFn: () => api.get<{ orders: SalesOrder[] }>("/orders?limit=300"),
-    refetchInterval: 10_000,
+    // Poll fast, even in a background tab, so new orders appear without a manual refresh.
+    refetchInterval: 4_000,
+    refetchIntervalInBackground: true,
   });
 
-  // Delivery orders that staff accepted but that haven't left the shop yet.
+  // Every accepted order (dine-in, takeaway, delivery) that hasn't been packed
+  // yet. Limited to the last two business days so old history never floods the board.
+  const since = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
   const waiting = (data?.orders ?? [])
-    .filter((o) => o.order_type === "DELIVERY" && ["CONFIRMED", "PREPARING", "READY"].includes(o.status))
+    .filter((o) => !["DRAFT", "PENDING_ACCEPTANCE", "CANCELLED", "REFUNDED", "DELIVERED", "OUT_FOR_DELIVERY"].includes(o.status))
+    // A delivery that already left the shop (even before packing was tracked) isn't waiting.
+    .filter((o) => o.order_type !== "DELIVERY" || ["CONFIRMED", "PREPARING", "READY"].includes(o.status))
+    .filter((o) => !o.packed_at && o.business_date >= since)
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   const readyToPack = waiting.filter((o) => o.kitchen_status === "READY");
   const inKitchen = waiting.filter((o) => o.kitchen_status !== "READY");
@@ -142,7 +161,7 @@ export function Packing() {
     <div>
       <PageHeader
         title="Packing"
-        description="Delivery orders cooked by the kitchen. Pack them and tap once — the order goes straight to the least-busy rider."
+        description="Orders cooked by the kitchen. Pack them and tap once — delivery orders go straight to the least-busy rider; dine-in and takeaway are marked handed over."
         actions={
           <span className="text-sm font-semibold text-slate-600">
             {readyToPack.length} ready to pack · {inKitchen.length} still in kitchen

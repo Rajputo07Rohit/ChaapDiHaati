@@ -35,6 +35,7 @@ export interface OrderRow {
   status: OrderStatus;
   payment_status: PaymentStatus;
   kitchen_status: "PENDING" | "READY";
+  packed_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;
@@ -70,6 +71,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     status: doc.status,
     payment_status: doc.paymentStatus,
     kitchen_status: doc.kitchenStatus,
+    packed_at: doc.packedAt ?? null,
     customer_name: doc.customerName,
     customer_phone: doc.customerPhone,
     delivery_address: doc.deliveryAddress,
@@ -385,7 +387,7 @@ export function buildItemSubs(resolvedItems: ResolvedOrderItem[], now: string, d
 }
 
 /**
- * Auto-assignment for delivery orders: whichever active rider currently has
+ * Rider auto-pick (used by assignRider from Packing when no rider is named): whichever active rider currently has
  * the fewest orders still in flight gets the next one — keeps it fair as
  * more riders are added, and needs no owner configuration. Returns null
  * (order stays unassigned, same as before) if there are no active riders
@@ -427,12 +429,9 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
   const { subtotal, itemDiscountTotal, orderDiscountPaise, net } = computeOrderTotals(resolvedItems, orderDiscountType, orderDiscountValue);
 
   const now = nowIso();
-  const autoAssignedRiderId = input.orderType === "DELIVERY" && !input.asDraft ? await pickLeastBusyRider() : null;
-  // A delivery order with a rider already on it has nothing to sit through
-  // kitchen-style staging for — it goes straight out, so it shows up
-  // actionable on the rider's dashboard immediately instead of getting
-  // stuck at CONFIRMED waiting for someone to click through PREPARING/READY.
-  const status: OrderStatus = input.asDraft ? "DRAFT" : autoAssignedRiderId ? "OUT_FOR_DELIVERY" : "CONFIRMED";
+  // Delivery orders are NOT auto-dispatched on creation: they start CONFIRMED
+  // and follow Kitchen -> Packing, where a rider is picked and the order goes out.
+  const status: OrderStatus = input.asDraft ? "DRAFT" : "CONFIRMED";
 
   const orderId = await withTransaction(async (session) => {
     const orderNumber = await nextSequence("order_number", session);
@@ -465,7 +464,7 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
           customerName: input.customerName ?? null,
           customerPhone: input.customerPhone ?? null,
           deliveryAddress: input.deliveryAddress ?? null,
-          assignedRiderId: autoAssignedRiderId,
+          assignedRiderId: null,
           subtotalPaise: subtotal,
           discountPaise: orderDiscountPaise,
           discountType: orderDiscountType,
@@ -496,21 +495,6 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
       },
       session
     );
-
-    if (autoAssignedRiderId) {
-      await recordAudit(
-        {
-          userId,
-          action: "RIDER_ASSIGNED",
-          entityType: "sales_order",
-          entityId: newOrderId,
-          oldValue: { assignedRiderId: null },
-          newValue: { assignedRiderId: autoAssignedRiderId, auto: true },
-          reason: "Auto-assigned to the least-busy active rider on order creation",
-        },
-        session
-      );
-    }
 
     return newOrderId;
   });
@@ -1052,6 +1036,32 @@ export async function markKitchenReady(orderId: string, userId: string): Promise
 }
 
 /**
+ * Packing's action for dine-in / takeaway orders: packed and handed over.
+ * Delivery orders are packed via assignRider (which also stamps packedAt).
+ * Only allowed once the kitchen has marked the order ready.
+ */
+export async function markPacked(orderId: string, userId: string): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (order.packedAt) return toOrderRow(order);
+  if (order.kitchenStatus !== "READY") throw new ConflictError("The kitchen hasn't marked this order ready yet.");
+
+  order.packedAt = nowIso();
+  order.updatedAt = order.packedAt;
+  await order.save();
+
+  await recordAudit({
+    userId,
+    action: "ORDER_PACKED",
+    entityType: "sales_order",
+    entityId: orderId,
+    newValue: { packedAt: order.packedAt },
+  });
+
+  return getOrderOrThrow(orderId);
+}
+
+/**
  * The rider's (or staff's, as a fallback) final action on a delivery: only
  * allowed once payment is fully settled, so a COD order can never be closed
  * out with money still outstanding. Consumes stock/COGS and completes the
@@ -1238,6 +1248,7 @@ export async function assignRider(orderId: string, requestedRiderId: string | nu
   order.assignedRiderId = riderId;
   if (order.status === "PENDING_ACCEPTANCE") order.confirmedAt = nowIso();
   if (order.status !== "OUT_FOR_DELIVERY") order.status = "OUT_FOR_DELIVERY";
+  if (!order.packedAt) order.packedAt = nowIso();
   order.updatedAt = nowIso();
   await order.save();
 

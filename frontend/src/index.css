@@ -83,6 +83,21 @@ html.theme-dark textarea { background-color: #1B1F27; color: #F3F4F7; }
 
 /* Status badges/pills use pale tints designed for a white card — darken the
    tint and lighten the ink so they still read as the same status, not washed out. */
+html.theme-dark .bg-emerald-50 { background-color: #0F2A1D; }
+html.theme-dark .border-emerald-200 { border-color: #1F5E3A; }
+html.theme-dark .border-emerald-300 { border-color: #2A7A4B; }
+html.theme-dark .bg-amber-50 { background-color: #2E2208; }
+html.theme-dark .border-amber-200 { border-color: #6B4E12; }
+html.theme-dark .text-amber-800 { color: #FCD34D; }
+html.theme-dark .border-rose-400 { border-color: #F87171; }
+html.theme-dark .bg-brand-50 { background-color: #3A1F0A; }
+html.theme-dark .border-brand-200 { border-color: #7C3A12; }
+html.theme-dark .text-brand-700 { color: #FDBA74; }
+html.theme-dark .text-emerald-800 { color: #86EFAC; }
+html.theme-dark .text-rose-800 { color: #FDA4AF; }
+html.theme-dark .ring-emerald-300 { --tw-ring-color: #2A7A4B; }
+html.theme-dark .ring-rose-300 { --tw-ring-color: #9F3A4A; }
+html.theme-dark .ring-slate-300 { --tw-ring-color: #454D5C; }
 html.theme-dark .bg-emerald-100 { background-color: #103823; }
 html.theme-dark .text-emerald-600 { color: #4ADE80; }
 html.theme-dark .text-emerald-700 { color: #6EE7A0; }

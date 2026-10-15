@@ -42,6 +42,7 @@ function OrderTicket({ order }: { order: SalesOrder }) {
     onSuccess: () => {
       toast.success(`Order #${order.order_number} ready`);
       queryClient.invalidateQueries({ queryKey: ["kitchen-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] }); // refreshes the Packing board too
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update order"),
   });

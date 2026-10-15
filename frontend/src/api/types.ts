@@ -130,6 +130,7 @@ export interface SalesOrder {
   status: OrderStatus;
   payment_status: PaymentStatus;
   kitchen_status: "PENDING" | "READY";
+  packed_at: string | null;
   customer_name: string | null;
   customer_phone: string | null;
   delivery_address: string | null;

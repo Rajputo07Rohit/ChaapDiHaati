@@ -86,6 +86,8 @@ export interface OrderDoc {
   status: OrderStatus;
   paymentStatus: PaymentStatus;
   kitchenStatus: KitchenStatus;
+  /** When packing finished (handed over / sent out). Null = still waiting on the Packing board. */
+  packedAt: string | null;
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
@@ -186,6 +188,7 @@ const orderSchema = new Schema<OrderDoc>({
   },
   paymentStatus: { type: String, required: true, enum: ["UNPAID", "PARTIAL", "PAID", "REFUNDED"], default: "UNPAID" },
   kitchenStatus: { type: String, required: true, enum: ["PENDING", "READY"], default: "PENDING" },
+  packedAt: { type: String, default: null },
   customerName: { type: String, default: null },
   customerPhone: { type: String, default: null },
   deliveryAddress: { type: String, default: null },

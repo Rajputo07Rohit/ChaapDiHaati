@@ -373,10 +373,12 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-01";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    // A rider already exists when the order is created, so it auto-dispatches
-    // straight to OUT_FOR_DELIVERY — no kitchen staging, no manual assignment.
-    expect(order.status).toBe("OUT_FOR_DELIVERY");
-    expect(order.assigned_rider_id).toBe(rider);
+    // New delivery orders wait in Kitchen -> Packing; packing assigns the rider.
+    expect(order.status).toBe("CONFIRMED");
+    expect(order.assigned_rider_id).toBeNull();
+    const dispatched = await assignRider(order.id, rider, ADMIN);
+    expect(dispatched.status).toBe("OUT_FOR_DELIVERY");
+    expect(dispatched.assigned_rider_id).toBe(rider);
     expect(order.payment_status).toBe("UNPAID");
 
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);
@@ -442,7 +444,7 @@ describe("Delivery + COD payment flow", () => {
     const date = "2020-05-05";
     const rider = await makeUser("RIDER");
     const order = await makeDeliveryOrder(date);
-    expect(order.status).toBe("OUT_FOR_DELIVERY");
+    expect(order.status).toBe("CONFIRMED");
     await assignRider(order.id, rider, ADMIN);
 
     await expect(markDelivered(order.id, rider, "RIDER")).rejects.toThrow(ValidationError);

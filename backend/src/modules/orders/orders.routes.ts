@@ -194,6 +194,17 @@ ordersRouter.post(
   })
 );
 
+// Packing's action for dine-in / takeaway: packed and handed over.
+ordersRouter.post(
+  "/:id/packed",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const order = await ordersService.markPacked(req.params.id, req.user!.id);
+    res.json({ order: await ordersService.getOrderFull(order.id) });
+  })
+);
+
 // The rider's (or staff's) final action on a delivery — blocked server-side
 // unless payment_status is already PAID.
 const deliverSchema = z.object({ bypassMissingInventory: z.boolean().optional() }).default({});
