@@ -28,6 +28,18 @@ function paymentModeLabel(order: SalesOrder): string {
   return names.join(" + ");
 }
 
+interface DaySummary {
+  business_date: string;
+  orders_count: number;
+  sales_paise: number;
+  cash_paise: number;
+  online_paise: number;
+  unpaid_paise: number;
+  cancelled_count: number;
+  cancelled_paise: number;
+  pending_acceptance_count: number;
+}
+
 export function Orders() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -55,6 +67,18 @@ export function Orders() {
     queryKey: ["payment-methods"],
     queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods"),
   });
+
+  // Whole-day totals come from the backend (over every order of the day), so
+  // they stay correct no matter how many rows the table has loaded.
+  const canSeeSales = user?.role === "ADMIN" || !!user?.isSuperAdmin;
+  const { data: summaryData } = useQuery({
+    enabled: canSeeSales,
+    queryKey: ["orders-day-summary", businessDate],
+    queryFn: () =>
+      api.get<{ summary: DaySummary }>(`/orders/day-summary${businessDate ? `?businessDate=${businessDate}` : ""}`),
+    refetchInterval: 15_000,
+  });
+  const summary = summaryData?.summary;
 
   // Infinite scroll: pages of PAGE_SIZE, newest first, each page keyed off the
   // createdAt of the last order of the previous one.
@@ -289,6 +313,7 @@ export function Orders() {
               <option value="CASH">Cash</option>
               <option value="ONLINE">Online</option>
             </Select>
+            {canSeeSales && (
             <button
               onClick={() => setShowTotals((v) => !v)}
               title={showTotals ? "Hide totals" : "Show totals"}
@@ -297,9 +322,18 @@ export function Orders() {
               {showTotals ? <EyeOff size={14} /> : <Eye size={14} />}
               {showTotals ? "Hide totals" : "Show totals"}
             </button>
+            )}
           </div>
         }
       />
+
+      {canSeeSales && summary && (
+        <div className="mb-3 inline-flex items-baseline gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm">
+          <span className="font-semibold text-slate-600">Total sales {toDdMmYyyy(summary.business_date)}</span>
+          <span className="font-bold tabular-nums text-brand-700">{showTotals ? formatPaise(summary.sales_paise) : "••••••"}</span>
+          <span className="text-xs text-slate-500">({summary.orders_count} orders)</span>
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         <div ref={scrollRef} className="overflow-auto max-h-[calc(100vh-18rem)] min-h-[20rem]">
@@ -333,8 +367,12 @@ export function Orders() {
                           </span>
                         </div>
                         <span className="tabular-nums">
-                          {showTotals
-                            ? formatPaise(dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0))
+                          {!canSeeSales ? null : showTotals
+                            ? formatPaise(
+                                summary && summary.business_date === date
+                                  ? summary.sales_paise
+                                  : dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0)
+                              )
                             : "••••••"}
                         </span>
                       </div>

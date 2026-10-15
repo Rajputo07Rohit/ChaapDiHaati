@@ -4,6 +4,8 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { requireCustomerAuth } from "../../middleware/customerAuth";
 import * as customerOrdersService from "./customerOrders.service";
 import { OrderRow } from "../orders/orders.service";
+import { isCashfreeConfigured } from "../payments/cashfree.service";
+import { env } from "../../config/env";
 
 export const customerOrdersRouter = Router();
 
@@ -72,10 +74,11 @@ const createOrderSchema = z.object({
   deliveryAddress: z.string().max(500).optional(),
   deliveryLatitude: z.number().min(-90).max(90).optional(),
   deliveryLongitude: z.number().min(-180).max(180).optional(),
-  paymentProvider: z.enum(["MOCK", "COD", "RAZORPAY"]).optional(),
+  paymentProvider: z.enum(["MOCK", "COD", "RAZORPAY", "CASHFREE"]).optional(),
   razorpayOrderId: z.string().optional(),
   razorpayPaymentId: z.string().optional(),
   razorpaySignature: z.string().optional(),
+  cashfreeOrderId: z.string().max(60).optional(),
   items: z.array(orderItemSchema).min(1),
   notes: z.string().optional(),
   idempotencyKey: z.string().min(1).max(100).optional(),
@@ -98,6 +101,11 @@ customerOrdersRouter.get(
     res.json({ orders: orders.map(toCustomerOrderResponse) });
   })
 );
+
+/** Lets the customer app know whether online payment is available, and whether it's the test environment (so it can show test card/UPI hints). Before "/:id" so it isn't read as an order id. */
+customerOrdersRouter.get("/payment-config", (_req, res) => {
+  res.json({ cashfree: { enabled: isCashfreeConfigured(), testMode: env.cashfreeEnv === "sandbox" } });
+});
 
 customerOrdersRouter.get(
   "/:id",
@@ -125,5 +133,32 @@ customerOrdersRouter.post(
     const input = razorpayOrderSchema.parse(req.body);
     const result = await customerOrdersService.createRazorpayOrder(input, req.customer!.phone);
     res.status(201).json(result);
+  })
+);
+
+customerOrdersRouter.post(
+  "/cashfree-order",
+  requireCustomerAuth,
+  asyncHandler(async (req, res) => {
+    const input = razorpayOrderSchema.parse(req.body);
+    const result = await customerOrdersService.createCashfreeCheckout(input, req.customer!.phone);
+    res.status(201).json(result);
+  })
+);
+
+customerOrdersRouter.post(
+  "/cashfree-order/cancel",
+  requireCustomerAuth,
+  asyncHandler(async (req, res) => {
+    const { cashfreeOrderId } = z.object({ cashfreeOrderId: z.string().min(1).max(60) }).parse(req.body);
+    res.json(await customerOrdersService.cancelCashfreeCheckout(cashfreeOrderId, req.customer!.phone));
+  })
+);
+
+customerOrdersRouter.get(
+  "/cashfree-order/:cashfreeOrderId/status",
+  requireCustomerAuth,
+  asyncHandler(async (req, res) => {
+    res.json(await customerOrdersService.getCashfreeCheckoutStatus(req.params.cashfreeOrderId, req.customer!.phone));
   })
 );

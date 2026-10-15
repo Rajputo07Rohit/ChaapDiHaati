@@ -3,7 +3,7 @@ import { z } from "zod";
 import { User } from "../../db/models";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
-import { isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
+import { isAdminOrSuperAdmin, isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
 import { redactOrderFieldsForRole } from "../../middleware/security";
 import * as ordersService from "./orders.service";
 
@@ -43,10 +43,19 @@ ordersRouter.get(
     const orders = await ordersService.listOrders({
       status: statusParam?.includes(",") ? statusParam.split(",") : statusParam,
       businessDate: req.query.businessDate as string | undefined,
-      limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
+      limit: req.query.limit ? Math.min(Math.max(parseInt(req.query.limit as string, 10) || 1, 1), 500) : undefined,
       before: req.query.before as string | undefined,
     });
     res.json({ orders });
+  })
+);
+
+ordersRouter.get(
+  "/day-summary",
+  requireAuth,
+  isAdminOrSuperAdmin,
+  asyncHandler(async (req, res) => {
+    res.json({ summary: await ordersService.getDaySummary(req.query.businessDate as string | undefined) });
   })
 );
 

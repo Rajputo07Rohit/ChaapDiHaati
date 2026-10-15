@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike, User } from "lucide-react";
+import { ChefHat, Clock, CheckCircle2, Calendar, UtensilsCrossed, Bike } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
-import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
+import { customerNoteOf } from "../components/PaymentModeBanner";
 import { ORDER_TYPE_STYLE, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
 import { toDdMmYyyy } from "../utils/date";
 
@@ -14,10 +14,6 @@ function todayIso(): string {
 
 function minutesAgo(iso: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 /** Ticks periodically purely to re-render elapsed-time labels — the order
@@ -50,78 +46,64 @@ function OrderTicket({ order }: { order: SalesOrder }) {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update order"),
   });
 
+  const orderNote = customerNoteOf(order.notes);
+
+  // Deliberately lean: the kitchen only needs what to cook and any special
+  // instructions — no customer name/phone/address/payment — so more tickets
+  // fit on screen at once.
   return (
     <div
       className={`rounded-2xl border-2 border-l-8 bg-white shadow-sm overflow-hidden flex flex-col ${ORDER_TYPE_STYLE[order.order_type]?.stripe ?? ""} ${
         ready ? "border-emerald-200 opacity-70" : urgent ? "border-rose-400" : "border-slate-200"
       }`}
     >
-      <div className={`flex items-center justify-between px-4 py-3 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
-        <span className="text-xl font-extrabold text-slate-900">#{order.order_number}</span>
+      <div className={`flex items-center justify-between gap-2 px-3.5 py-2.5 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-xl font-extrabold text-slate-900 leading-none">#{order.order_number}</span>
+          <OrderTypeBadge type={order.order_type} />
+        </span>
         <span
-          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold whitespace-nowrap ${
             ready ? "bg-emerald-600 text-white" : urgent ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-600"
           }`}
         >
-          <Clock size={12} /> {age === 0 ? "just now" : `${age} min`}
+          <Clock size={13} /> {age === 0 ? "now" : `${age}m`}
         </span>
       </div>
 
-      <div className="px-4 py-2 border-b border-slate-100 space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5">
-            <OrderTypeBadge type={order.order_type} />
-            {(order.order_type === "DELIVERY" || order.order_type === "ONLINE") && <PaymentModeBanner order={order} />}
-          </span>
-          <span className="text-xs text-slate-400 tabular-nums">{formatTime(order.created_at)}</span>
-        </div>
-        {order.customer_name?.trim() && (
-          <div className="flex items-center gap-1.5 text-sm font-bold text-slate-900">
-            <User size={14} className="text-slate-500 shrink-0" />
-            {order.customer_name}
-          </div>
-        )}
-        {order.order_type === "DELIVERY" && order.delivery_address?.trim() && (
-          <div className="flex items-start gap-1.5 text-sm text-slate-700">
-            <MapPin size={14} className="text-orange-500 shrink-0 mt-0.5" />
-            <span className="font-medium">{order.delivery_address}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="flex-1 px-4 py-3 space-y-2">
+      <div className="flex-1 px-3.5 py-2.5 space-y-2">
         {items.map((item) => (
           <div key={item.id} className="flex items-start justify-between gap-2">
-            <div>
+            <div className="min-w-0 leading-snug">
               <span className="text-base font-bold text-slate-900">{item.item_name_snapshot}</span>
               {item.price_type !== "SINGLE" && <span className="text-sm text-slate-500"> ({item.price_type})</span>}
               {(item.addons ?? []).length > 0 && (
                 <div className="text-sm text-slate-600">+ {item.addons.map((a) => a.name).join(", ")}</div>
               )}
-              {item.special_instructions && <div className="text-sm text-amber-700 font-medium">Note: {item.special_instructions}</div>}
+              {item.special_instructions && <div className="text-sm text-amber-700 font-semibold">⚠ {item.special_instructions}</div>}
             </div>
-            <span className="text-lg font-extrabold text-brand-600 tabular-nums shrink-0">×{item.quantity}</span>
+            <span className="text-xl font-extrabold text-brand-600 tabular-nums shrink-0 leading-none">×{item.quantity}</span>
           </div>
         ))}
       </div>
 
-      {customerNoteOf(order.notes) && (
-        <div className="mx-4 mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800">
-          Special instructions: {customerNoteOf(order.notes)}
+      {orderNote && (
+        <div className="mx-3.5 mb-2.5 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-sm font-semibold text-amber-800">
+          ⚠ {orderNote}
         </div>
       )}
 
       {ready ? (
-        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-base py-3.5">
-          <CheckCircle2 size={18} /> Ready
+        <div className="w-full flex items-center justify-center gap-1.5 bg-emerald-100 text-emerald-700 font-bold text-sm py-2.5">
+          <CheckCircle2 size={16} /> Ready
         </div>
       ) : (
         <button
           disabled={markReadyMutation.isPending}
           onClick={() => markReadyMutation.mutate()}
-          className="w-full bg-emerald-600 text-white font-bold text-base py-3.5 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
+          className="w-full bg-emerald-600 text-white font-bold text-base py-3 disabled:opacity-50 [touch-action:manipulation] active:bg-emerald-700"
         >
-          {markReadyMutation.isPending ? "Marking Ready…" : "Mark Ready"}
+          {markReadyMutation.isPending ? "Marking…" : "Mark Ready"}
         </button>
       )}
     </div>
@@ -176,14 +158,14 @@ function KitchenSection({
 
       {ordersByDate.map(([date, dateOrders]) => (
         <Fragment key={date}>
-          <div className="flex items-center gap-2 bg-slate-800 text-white text-sm font-bold px-4 py-2 rounded-xl mt-4 first:mt-3">
+          <div className="flex items-center gap-2 bg-slate-800 text-white text-xs font-bold px-3 py-1.5 rounded-lg mt-3 first:mt-3">
             <Calendar size={14} />
             {toDdMmYyyy(date)}
             <span className="font-normal text-slate-300">
               · {dateOrders.length} order{dateOrders.length > 1 ? "s" : ""}
             </span>
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(265px,1fr))] gap-3.5 mt-3">
             {dateOrders.map((o) => (
               <OrderTicket key={o.id} order={o} />
             ))}

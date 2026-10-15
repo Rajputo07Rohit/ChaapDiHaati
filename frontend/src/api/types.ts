@@ -163,6 +163,10 @@ export interface BusinessProfile {
   businessName: string;
   tagline: string;
   address: string;
+  phone?: string;
+  instagram?: string;
+  mapsUrl?: string;
+  reviewUrl?: string;
 }
 
 export interface Supplier {

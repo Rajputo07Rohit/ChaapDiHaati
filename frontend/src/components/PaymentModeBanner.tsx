@@ -10,7 +10,7 @@ export function customerNoteOf(notes: string | null | undefined): string {
   if (!notes) return "";
   return notes
     .replace(/^\[TEST PAYMENT[^\]]*\]\s*/i, "")
-    .replace(/^\[Paid via Razorpay[^\]]*\]\s*/i, "")
+    .replace(/^\[Paid via [^\]]*\]\s*/i, "")
     .replace(/^Cash on Delivery(\s*[—-]\s*)?/i, "")
     .trim();
 }

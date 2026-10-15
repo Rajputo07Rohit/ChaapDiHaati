@@ -33,4 +33,10 @@ export const env = {
   // error rather than the app failing to boot.
   razorpayKeyId: process.env.RAZORPAY_KEY_ID,
   razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET,
+  // Cashfree Payments (UPI / cards / netbanking / wallets). "sandbox" uses
+  // Cashfree's test environment — no real money moves. Set CASHFREE_ENV=production
+  // together with live keys only when going live.
+  cashfreeAppId: process.env.CASHFREE_APP_ID,
+  cashfreeSecretKey: process.env.CASHFREE_SECRET_KEY,
+  cashfreeEnv: (process.env.CASHFREE_ENV === "production" ? "production" : "sandbox") as "sandbox" | "production",
 };

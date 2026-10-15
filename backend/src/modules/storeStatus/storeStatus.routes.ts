@@ -7,11 +7,14 @@ import * as storeStatusService from "./storeStatus.service";
 
 const hhmm = z.string().regex(storeStatusService.TIME_RE, "Use HH:MM (24-hour)");
 
+const dayHours = z.object({ open: z.boolean(), openTime: hhmm, closeTime: hhmm });
+
 const schema = z.object({
   mode: z.enum(["AUTO", "OPEN", "CLOSED"]),
   openTime: hhmm,
   closeTime: hhmm,
   closedMessage: z.string().max(200).default(""),
+  days: z.array(dayHours).length(7).optional(),
 });
 
 export const storeStatusAdminRouter = Router();
@@ -54,6 +57,16 @@ storeStatusPublicRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
     const s = await storeStatusService.getStoreStatus();
-    res.json({ isOpen: s.isOpen, message: s.message, opensAt: s.opensAt, openTime: s.openTime, closeTime: s.closeTime, mode: s.mode, changesInSeconds: s.changesInSeconds });
+    res.json({
+      isOpen: s.isOpen,
+      message: s.message,
+      opensAt: s.opensAt,
+      openTime: s.todayOpenTime,
+      closeTime: s.todayCloseTime,
+      mode: s.mode,
+      changesInSeconds: s.changesInSeconds,
+      nextChangeTime: s.nextChangeTime,
+      weekSummary: s.weekSummary,
+    });
   })
 );

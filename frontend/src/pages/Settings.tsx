@@ -31,17 +31,25 @@ function BusinessProfileSection() {
   const [businessName, setBusinessName] = useState("");
   const [tagline, setTagline] = useState("");
   const [address, setAddress] = useState("");
+  const [phone, setPhone] = useState("");
+  const [instagram, setInstagram] = useState("");
+  const [mapsUrl, setMapsUrl] = useState("");
+  const [reviewUrl, setReviewUrl] = useState("");
 
   useEffect(() => {
     if (data) {
       setBusinessName(data.businessName);
       setTagline(data.tagline);
       setAddress(data.address);
+      setPhone(data.phone ?? "");
+      setInstagram(data.instagram ?? "");
+      setMapsUrl(data.mapsUrl ?? "");
+      setReviewUrl(data.reviewUrl ?? "");
     }
   }, [data]);
 
   const mutation = useMutation({
-    mutationFn: () => api.put("/settings/business-profile", { businessName, tagline, address }),
+    mutationFn: () => api.put("/settings/business-profile", { businessName, tagline, address, phone, instagram, mapsUrl, reviewUrl }),
     onSuccess: () => {
       toast.success("Business profile saved");
       queryClient.invalidateQueries({ queryKey: ["business-profile"] });
@@ -53,7 +61,7 @@ function BusinessProfileSection() {
     <section>
       <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Business Profile</h2>
       <Card className="p-4 max-w-lg space-y-3">
-        <p className="text-xs text-slate-500">Used on the WhatsApp bill shared with customers.</p>
+        <p className="text-xs text-slate-500">Used on the WhatsApp bill and in the customer app footer.</p>
         <div>
           <label className="text-xs font-medium text-slate-500">Business name</label>
           <Input value={businessName} onChange={(e) => setBusinessName(e.target.value)} className="w-full" />
@@ -64,7 +72,26 @@ function BusinessProfileSection() {
         </div>
         <div>
           <label className="text-xs font-medium text-slate-500">Address (optional)</label>
-          <Input value={address} onChange={(e) => setAddress(e.target.value)} className="w-full" placeholder="Shown at the bottom of the bill" />
+          <Input value={address} onChange={(e) => setAddress(e.target.value)} className="w-full" placeholder="Shown on the bill and in the customer app footer" />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Phone (optional)</label>
+          <Input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full" placeholder="Customer app footer — tap to call" />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Instagram (optional)</label>
+          <Input value={instagram} onChange={(e) => setInstagram(e.target.value)} className="w-full" placeholder="@username or full profile link" />
+          {instagram.trim() && !/^(@?[A-Za-z0-9._]{1,30}|.*instagram\.com\/[A-Za-z0-9._]+.*)$/.test(instagram.trim()) && (
+            <p className="mt-1 text-xs text-amber-600">That looks like a display name. Use the @username (no spaces) or paste the profile link from Instagram.</p>
+          )}
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Google Maps link</label>
+          <Input value={mapsUrl} onChange={(e) => setMapsUrl(e.target.value)} className="w-full" placeholder="https://maps.app.goo.gl/…" />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Google review link</label>
+          <Input value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)} className="w-full" placeholder="Opened by the “Rate us on Google” popup after delivery" />
         </div>
         <Button disabled={!businessName || mutation.isPending} onClick={() => mutation.mutate()}>
           {mutation.isPending ? "Saving…" : "Save"}

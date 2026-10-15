@@ -196,6 +196,48 @@ export async function listOrders(
   }));
 }
 
+/**
+ * Whole-day totals for the Orders screen, computed over every order of the
+ * business date (not just the page of rows the UI has loaded). Sales exclude
+ * cancelled/refunded orders and anything not yet accepted (draft/pending).
+ */
+export async function getDaySummary(businessDate: string = todayBusinessDate()) {
+  const docs = await Order.find({ businessDate }).select("status netTotalPaise payments").lean();
+  const methodIds = [...new Set(docs.flatMap((d) => d.payments.filter((p) => p.status === "ACTIVE").map((p) => p.paymentMethodId)))];
+  const methods = await PaymentMethod.find({ _id: { $in: methodIds } }).select("type").lean();
+  const typeById = new Map(methods.map((m) => [m._id, m.type]));
+
+  const NOT_SALES = ["CANCELLED", "REFUNDED", "DRAFT", "PENDING_ACCEPTANCE"];
+  let salesPaise = 0, salesCount = 0, cashPaise = 0, onlinePaise = 0, cancelledCount = 0, cancelledPaise = 0, pendingCount = 0;
+  for (const d of docs) {
+    if (d.status === "CANCELLED") {
+      cancelledCount++;
+      cancelledPaise += d.netTotalPaise;
+    } else if (d.status === "PENDING_ACCEPTANCE") {
+      pendingCount++;
+    }
+    if (NOT_SALES.includes(d.status)) continue;
+    salesCount++;
+    salesPaise += d.netTotalPaise;
+    for (const p of d.payments) {
+      if (p.status !== "ACTIVE") continue;
+      if (typeById.get(p.paymentMethodId) === "ONLINE") onlinePaise += p.amountPaise;
+      else cashPaise += p.amountPaise;
+    }
+  }
+  return {
+    business_date: businessDate,
+    orders_count: salesCount,
+    sales_paise: salesPaise,
+    cash_paise: cashPaise,
+    online_paise: onlinePaise,
+    unpaid_paise: Math.max(0, salesPaise - cashPaise - onlinePaise),
+    cancelled_count: cancelledCount,
+    cancelled_paise: cancelledPaise,
+    pending_acceptance_count: pendingCount,
+  };
+}
+
 interface ResolvedOrderItemAddon {
   id: string;
   name: string;

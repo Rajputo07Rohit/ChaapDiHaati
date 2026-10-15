@@ -49,10 +49,10 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN", "MANAGER"] },
   { to: "/pos", label: "POS / New Order", icon: ShoppingCart, roles: ["ADMIN", "MANAGER", "STAFF"] },
-  { to: "/kitchen", label: "Kitchen", icon: ChefHat, roles: ["ADMIN", "MANAGER", "STAFF"] },
-  { to: "/web-orders", label: "Web Orders", icon: Globe, roles: ["ADMIN", "MANAGER", "STAFF"] },
-  { to: "/packing", label: "Packing", icon: Package, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/orders", label: "Orders", icon: ClipboardList, roles: ["ADMIN", "MANAGER", "STAFF"] },
+  { to: "/web-orders", label: "Web Orders", icon: Globe, roles: ["ADMIN", "MANAGER", "STAFF"] },
+  { to: "/kitchen", label: "Kitchen", icon: ChefHat, roles: ["ADMIN", "MANAGER", "STAFF"] },
+  { to: "/packing", label: "Packing", icon: Package, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/menu", label: "Menu", icon: BookOpen, roles: ["ADMIN", "MANAGER", "STAFF"] },
   { to: "/inventory", label: "Inventory", icon: Boxes, roles: ["ADMIN", "MANAGER"] },
   { to: "/purchases", label: "Purchases", icon: Truck, roles: ["ADMIN", "MANAGER"] },

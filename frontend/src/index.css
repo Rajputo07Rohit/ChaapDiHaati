@@ -96,6 +96,12 @@ html.theme-dark .text-amber-600 { color: #FBBF24; }
 html.theme-dark .text-amber-700 { color: #FCD34D; }
 html.theme-dark .bg-blue-100 { background-color: #132A47; }
 html.theme-dark .text-blue-700 { color: #7FB4EF; }
+html.theme-dark .bg-purple-100 { background-color: #2A1A47; }
+html.theme-dark .text-purple-700 { color: #C4A5F5; }
+html.theme-dark .bg-orange-100 { background-color: #3D2208; }
+html.theme-dark .text-orange-700 { color: #FDBA74; }
+html.theme-dark .bg-teal-100 { background-color: #0F3331; }
+html.theme-dark .text-teal-700 { color: #5EEAD4; }
 
 html, body, #root {
   height: 100%;

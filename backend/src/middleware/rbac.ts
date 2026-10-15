@@ -28,3 +28,10 @@ export function requireSuperAdmin(req: Request, _res: Response, next: NextFuncti
   if (!req.user.isSuperAdmin) return next(new ForbiddenError());
   next();
 }
+
+/** Admins and the super admin (owner). Gates whole-day sales totals. */
+export function isAdminOrSuperAdmin(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user) return next(new UnauthorizedError());
+  if (req.user.role !== "ADMIN" && !req.user.isSuperAdmin) return next(new ForbiddenError());
+  next();
+}

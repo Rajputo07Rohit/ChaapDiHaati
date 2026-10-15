@@ -2,10 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
-import { isAdmin } from "../../middleware/rbac";
+import { isAdmin, isAnyRole } from "../../middleware/rbac";
 import { recordAudit } from "../../utils/audit";
 import * as menuService from "./menu.service";
-
+import { ValidationError } from "../../utils/errors";
 export const menuRouter = Router();
 
 menuRouter.get(
@@ -58,6 +58,30 @@ const updateItemSchema = z.object({
   fullPricePaise: z.number().int().min(0).optional(),
   singlePricePaise: z.number().int().min(0).optional(),
 });
+
+// Out-of-stock switch open to every staff role (full item edits stay admin-only).
+// Only flips ACTIVE <-> UNAVAILABLE; a DISCONTINUED item can't be touched here.
+menuRouter.patch(
+  "/:id/stock",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const { inStock } = z.object({ inStock: z.boolean() }).parse(req.body);
+    const existing = await menuService.getMenuItemOrThrow(req.params.id);
+    if (existing.status === "DISCONTINUED") throw new ValidationError("This item is discontinued.");
+    const status = inStock ? "ACTIVE" : "UNAVAILABLE";
+    await menuService.updateMenuItemFields(req.params.id, { status });
+    await recordAudit({
+      userId: req.user!.id,
+      action: "MENU_ITEM_UPDATED",
+      entityType: "menu_item",
+      entityId: req.params.id,
+      oldValue: { status: existing.status },
+      newValue: { status },
+    });
+    res.json({ item: await menuService.getMenuItemOrThrow(req.params.id) });
+  })
+);
 
 menuRouter.patch(
   "/:id",

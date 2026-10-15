@@ -7,36 +7,39 @@ import { Button, Card, Input } from "./ui/Primitives";
 
 export type StoreMode = "AUTO" | "OPEN" | "CLOSED";
 
+export interface DayHours {
+  open: boolean;
+  openTime: string;
+  closeTime: string;
+}
+
 export interface StoreStatus {
   mode: StoreMode;
   openTime: string;
   closeTime: string;
   closedMessage: string;
+  days?: DayHours[]; // index 0 = Sunday
   isOpen: boolean;
   message: string | null;
+  weekSummary: { label: string; hours: string }[];
 }
 
 const QUERY_KEY = ["store-hours"];
 
 function useStoreStatus() {
-  return useQuery({ queryKey: QUERY_KEY, queryFn: () => api.get<StoreStatus>("/store-hours"), refetchInterval: 60_000 });
+  return useQuery({ queryKey: QUERY_KEY, queryFn: () => api.get<StoreStatus>("/store-hours"), refetchInterval: 10_000 });
 }
 
 function useSaveStoreHours() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (v: Pick<StoreStatus, "mode" | "openTime" | "closeTime" | "closedMessage">) => api.put<StoreStatus>("/store-hours", v),
+    mutationFn: (v: Pick<StoreStatus, "mode" | "openTime" | "closeTime" | "closedMessage" | "days">) => api.put<StoreStatus>("/store-hours", v),
     onSuccess: (data) => {
       queryClient.setQueryData(QUERY_KEY, data);
       toast.success(data.isOpen ? "Store is open for orders" : "Store is closed for orders");
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not save store hours"),
   });
-}
-
-function fmt12(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
 
 /** Compact sidebar control — one tap to stop/resume online orders (e.g. "we're out of stock"). */
@@ -85,26 +88,44 @@ const MODES: { value: StoreMode; title: string; hint: string }[] = [
   { value: "CLOSED", title: "Closed now", hint: "Out of stock / busy — pause orders" },
 ];
 
+// Shown Monday first; `index` is the JS weekday (0 = Sunday) the server stores.
+const WEEK: { index: number; name: string }[] = [
+  { index: 1, name: "Monday" },
+  { index: 2, name: "Tuesday" },
+  { index: 3, name: "Wednesday" },
+  { index: 4, name: "Thursday" },
+  { index: 5, name: "Friday" },
+  { index: 6, name: "Saturday" },
+  { index: 0, name: "Sunday" },
+];
+
 export function StoreHoursSection() {
   const { data } = useStoreStatus();
   const save = useSaveStoreHours();
 
   const [mode, setMode] = useState<StoreMode>("AUTO");
-  const [openTime, setOpenTime] = useState("11:00");
-  const [closeTime, setCloseTime] = useState("23:00");
+  const [days, setDays] = useState<DayHours[]>(() => Array.from({ length: 7 }, () => ({ open: true, openTime: "15:00", closeTime: "22:30" })));
   const [closedMessage, setClosedMessage] = useState("");
 
   useEffect(() => {
     if (data) {
       setMode(data.mode);
-      setOpenTime(data.openTime);
-      setCloseTime(data.closeTime);
+      setDays(data.days?.length === 7 ? data.days : Array.from({ length: 7 }, () => ({ open: true, openTime: data.openTime, closeTime: data.closeTime })));
       setClosedMessage(data.closedMessage);
     }
   }, [data]);
 
-  const allDay = openTime === closeTime;
-  const dirty = !!data && (mode !== data.mode || openTime !== data.openTime || closeTime !== data.closeTime || closedMessage !== data.closedMessage);
+  function patchDay(index: number, patch: Partial<DayHours>) {
+    setDays((prev) => prev.map((d, i) => (i === index ? { ...d, ...patch } : d)));
+  }
+
+  // Copies one day's hours onto a set of days (e.g. Monday -> Tue–Fri).
+  function copyFrom(sourceIndex: number, targets: number[]) {
+    setDays((prev) => prev.map((d, i) => (targets.includes(i) ? { ...prev[sourceIndex] } : d)));
+  }
+
+  const dirty =
+    !!data && (mode !== data.mode || closedMessage !== data.closedMessage || JSON.stringify(days) !== JSON.stringify(data.days ?? null));
 
   return (
     <section>
@@ -119,7 +140,7 @@ export function StoreHoursSection() {
           <div className="flex-1">
             <div className="font-semibold">{data ? (data.isOpen ? "Store is open — customers can order" : "Store is closed — ordering is paused") : "Loading…"}</div>
             <div className="text-xs opacity-80">
-              {allDay ? "Open all day when on schedule" : `Schedule: ${fmt12(openTime)} – ${fmt12(closeTime)}`} · saved status shown to customers instantly
+              {data?.weekSummary?.length ? data.weekSummary.map((r) => `${r.label} ${r.hours}`).join(" · ") : "Set your weekly hours below"}
             </div>
           </div>
         </div>
@@ -151,19 +172,40 @@ export function StoreHoursSection() {
         </div>
 
         <div className={mode === "AUTO" ? "" : "opacity-50"}>
-          <label className="text-xs font-medium text-slate-500">Daily timing (IST)</label>
-          <div className="mt-1.5 flex flex-wrap items-center gap-3">
-            <div>
-              <div className="text-[11px] text-slate-400 mb-1">Opens at</div>
-              <Input type="time" value={openTime} onChange={(e) => setOpenTime(e.target.value)} />
-            </div>
-            <span className="mt-5 text-slate-400">→</span>
-            <div>
-              <div className="text-[11px] text-slate-400 mb-1">Closes at</div>
-              <Input type="time" value={closeTime} onChange={(e) => setCloseTime(e.target.value)} />
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <label className="text-xs font-medium text-slate-500">Weekly timing (IST)</label>
+            <div className="flex gap-3 text-xs">
+              <button type="button" onClick={() => copyFrom(1, [2, 3, 4, 5])} className="font-semibold text-brand-600 hover:underline">
+                Monday → Tue–Fri
+              </button>
+              <button type="button" onClick={() => copyFrom(6, [0])} className="font-semibold text-brand-600 hover:underline">
+                Saturday → Sunday
+              </button>
             </div>
           </div>
-          <p className="mt-1.5 text-xs text-slate-400">Overnight is fine (e.g. 6 PM → 2 AM). Same open and close time = open all day.</p>
+          <div className="mt-2 divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-700">
+            {WEEK.map(({ index, name }) => {
+              const d = days[index];
+              return (
+                <div key={index} className="flex items-center gap-3 px-3 py-2">
+                  <label className="flex w-32 items-center gap-2 text-sm font-medium">
+                    <input type="checkbox" checked={d.open} onChange={(e) => patchDay(index, { open: e.target.checked })} className="h-4 w-4 accent-brand-600" />
+                    {name}
+                  </label>
+                  {d.open ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Input type="time" value={d.openTime} onChange={(e) => patchDay(index, { openTime: e.target.value })} />
+                      <span className="text-slate-400">→</span>
+                      <Input type="time" value={d.closeTime} onChange={(e) => patchDay(index, { closeTime: e.target.value })} />
+                    </div>
+                  ) : (
+                    <span className="text-sm text-slate-400">Closed all day</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-400">Untick a day to close it. Closing after midnight is fine (e.g. 6 PM → 2 AM). Same open and close time = open 24 hours.</p>
         </div>
 
         <div>
@@ -172,14 +214,18 @@ export function StoreHoursSection() {
             value={closedMessage}
             maxLength={200}
             onChange={(e) => setClosedMessage(e.target.value)}
-            placeholder="e.g. We're out of stock today — back tomorrow at 11 AM!"
+            placeholder="e.g. We're out of stock today — back tomorrow at 3 PM!"
             className="w-full"
           />
         </div>
 
         <div className="flex items-center gap-3">
           <Button
-            onClick={() => save.mutate({ mode, openTime, closeTime, closedMessage })}
+            onClick={() => {
+              // openTime/closeTime stay as the Monday window — only read by older deploys that don't know about per-day hours.
+              const monday = days[1];
+              save.mutate({ mode, openTime: monday.openTime, closeTime: monday.closeTime, closedMessage, days });
+            }}
             disabled={save.isPending || !dirty}
           >
             {save.isPending ? "Saving…" : "Save changes"}

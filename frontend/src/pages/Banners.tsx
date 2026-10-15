@@ -54,8 +54,8 @@ export function Banners() {
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
     const incoming = Array.from(list);
-    const images = incoming.filter((f) => f.type.startsWith("image/"));
-    if (images.length < incoming.length) toast.error("Only image files were added.");
+    const images = incoming.filter((f) => ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(f.type));
+    if (images.length < incoming.length) toast.error("Only JPG, PNG, WebP or GIF images can be added.");
     const tooBig = images.filter((f) => f.size > MAX_BYTES);
     if (tooBig.length) toast.error(`${tooBig.length} image(s) over 5 MB were skipped.`);
     const ok = images.filter((f) => f.size <= MAX_BYTES);
@@ -165,8 +165,8 @@ export function Banners() {
         >
           <ImagePlus size={24} className="text-slate-400" />
           <span className="text-sm font-medium text-slate-700">Choose images or drop them here</span>
-          <span className="text-xs text-slate-400">Select several at once · up to {MAX_BATCH} images · max 5 MB each</span>
-          <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(e) => addFiles(e.target.files)} className="sr-only" />
+          <span className="text-xs text-slate-400">Select several at once · JPG, PNG, WebP or GIF · up to {MAX_BATCH} images · max 5 MB each</span>
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple onChange={(e) => addFiles(e.target.files)} className="sr-only" />
         </label>
 
         {queue.length > 0 && (

@@ -19,11 +19,13 @@ export interface CreateCustomerOrderInput {
    * createCustomerOrder); "COD" is real, collected at the door; "RAZORPAY"
    * is a real Razorpay checkout running in test mode.
    */
-  paymentProvider?: "MOCK" | "COD" | "RAZORPAY";
+  paymentProvider?: "MOCK" | "COD" | "RAZORPAY" | "CASHFREE";
   /** Required when paymentProvider is "RAZORPAY" — identifies the order created via createRazorpayOrder and the payment to verify against it. */
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   razorpaySignature?: string;
+  /** Required when paymentProvider is "CASHFREE" — the order created via createCashfreeCheckout, verified server-side against Cashfree before the order is accepted as paid. */
+  cashfreeOrderId?: string;
   items: OrderItemInput[];
   notes?: string;
   /** Client-generated key so a retried/duplicated submit returns the existing order instead of creating another. */

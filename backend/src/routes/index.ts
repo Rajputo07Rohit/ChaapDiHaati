@@ -15,7 +15,7 @@ import { dailyClosingRouter } from "../modules/dailyClosing/dailyClosing.routes"
 import { dashboardRouter } from "../modules/dashboard/dashboard.routes";
 import { reportsRouter } from "../modules/reports/reports.routes";
 import { auditRouter } from "../modules/audit/audit.routes";
-import { settingsRouter } from "../modules/settings/settings.routes";
+import { settingsRouter, publicBusinessRouter } from "../modules/settings/settings.routes";
 import { backupRouter } from "../modules/backup/backup.routes";
 import { discountsRouter } from "../modules/discounts/discounts.routes";
 import { customerMenuRouter } from "../modules/customerMenu/customerMenu.routes";
@@ -59,3 +59,4 @@ apiRouter.use("/public/orders", customerOrdersRouter);
 apiRouter.use("/public/promo-codes", promoCodesPublicRouter);
 apiRouter.use("/public/banners", bannersPublicRouter);
 apiRouter.use("/public/store-status", storeStatusPublicRouter);
+apiRouter.use("/public/business-info", publicBusinessRouter);

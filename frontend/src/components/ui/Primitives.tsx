@@ -1,5 +1,5 @@
 import { ButtonHTMLAttributes, HTMLAttributes, ReactNode, useEffect, useRef, useState } from "react";
-import { Globe, MoreVertical, ShoppingBag, Truck, UtensilsCrossed } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 
 export function Card({ className = "", children, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
@@ -232,20 +232,20 @@ export function ActionMenu({ items }: { items: ActionMenuItem[] }) {
 /** One colour per order type, used everywhere orders are listed so staff can
  * tell Dine-in / Takeaway / Delivery apart at a glance. `stripe` is a left
  * border for table rows and cards. */
-export const ORDER_TYPE_STYLE: Record<string, { label: string; badge: string; stripe: string; icon: typeof Truck }> = {
-  DINE_IN: { label: "Dine-in", badge: "bg-blue-600 text-white", stripe: "border-l-blue-500", icon: UtensilsCrossed },
-  TAKEAWAY: { label: "Takeaway", badge: "bg-purple-600 text-white", stripe: "border-l-purple-500", icon: ShoppingBag },
-  DELIVERY: { label: "Delivery", badge: "bg-orange-500 text-white", stripe: "border-l-orange-500", icon: Truck },
-  ONLINE: { label: "Online", badge: "bg-teal-600 text-white", stripe: "border-l-teal-500", icon: Globe },
+export const ORDER_TYPE_STYLE: Record<string, { label: string; badge: string; stripe: string }> = {
+  DINE_IN: { label: "Dine-in", badge: "bg-blue-100 text-blue-700", stripe: "border-l-blue-500" },
+  TAKEAWAY: { label: "Takeaway", badge: "bg-purple-100 text-purple-700", stripe: "border-l-purple-500" },
+  DELIVERY: { label: "Delivery", badge: "bg-orange-100 text-orange-700", stripe: "border-l-orange-500" },
+  ONLINE: { label: "Online", badge: "bg-teal-100 text-teal-700", stripe: "border-l-teal-500" },
 };
 
 export function OrderTypeBadge({ type, prefix }: { type: string; prefix?: string }) {
   const style = ORDER_TYPE_STYLE[type];
   if (!style) return <span className="text-xs text-slate-500">{type}</span>;
-  const Icon = style.icon;
+  // Same size/weight as <Badge> so it reads like every other badge in the app.
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide whitespace-nowrap ${style.badge}`}>
-      <Icon size={12} /> {prefix}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${style.badge}`}>
+      {prefix}
       {style.label}
     </span>
   );

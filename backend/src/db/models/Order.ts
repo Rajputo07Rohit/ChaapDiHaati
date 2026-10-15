@@ -109,6 +109,8 @@ export interface OrderDoc {
   stockOverride: boolean;
   /** Client-generated key for the customer self-order flow — a retried/duplicated POST with the same key returns the existing order instead of creating a second one. Null for staff-created orders. */
   clientIdempotencyKey: string | null;
+  /** Gateway order id of the online payment that paid for this order (e.g. the Cashfree order id). Unique, so one payment can never pay for two orders. */
+  paymentRef: string | null;
   createdBy: string | null;
   confirmedAt: string | null;
   /** Prep-time estimate (minutes) chosen by staff when accepting a self-order; drives the customer's ETA. */
@@ -207,6 +209,7 @@ const orderSchema = new Schema<OrderDoc>({
   // to null. Staff-created orders (which never pass this) must leave the
   // field entirely unset, or every one of them would collide on `null`.
   clientIdempotencyKey: { type: String },
+  paymentRef: { type: String },
   createdBy: { type: String, default: null, ref: "User" },
   confirmedAt: { type: String, default: null },
   prepTimeMinutes: { type: Number, default: null },
@@ -224,6 +227,7 @@ orderSchema.index({ status: 1 });
 orderSchema.index({ assignedRiderId: 1 });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ clientIdempotencyKey: 1 }, { unique: true, sparse: true });
+orderSchema.index({ paymentRef: 1 }, { unique: true, sparse: true });
 orderSchema.index({ promoCode: 1, customerPhone: 1 });
 // Customer order history: filter by phone, newest first.
 orderSchema.index({ customerPhone: 1, createdAt: -1 });

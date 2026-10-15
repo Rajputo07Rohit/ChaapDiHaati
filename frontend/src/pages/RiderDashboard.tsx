@@ -19,6 +19,8 @@ function copyNumber(phone: string) {
 }
 
 function remainingPaise(order: SalesOrder) {
+  // Prepaid (online) orders are flagged PAID without payment rows, so they owe nothing at the door.
+  if (order.payment_status === "PAID") return 0;
   return order.net_total_paise - (order.payments ?? []).reduce((s, p) => s + p.amount_paise, 0);
 }
 

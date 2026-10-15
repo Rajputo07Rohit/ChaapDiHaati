@@ -14,6 +14,7 @@ import { ForbiddenError } from "../../utils/errors";
 import { validatePromoCodeForOrder } from "../promoCodes/promoCodes.service";
 import { PromoCode } from "../../db/models";
 import { assertRumaliHasMain, assertStoreOpen } from "../storeStatus/storeStatus.service";
+import { createCashfreeOrder, fetchCashfreeOrder, isCashfreeConfigured, tenDigitPhone, terminateCashfreeOrder } from "../payments/cashfree.service";
 
 let razorpayClient: Razorpay | null = null;
 function getRazorpayClient(): Razorpay {
@@ -51,6 +52,99 @@ export async function createRazorpayOrder(input: CreateRazorpayOrderInput, phone
   return { razorpayOrderId: order.id, amountPaise, keyId: env.razorpayKeyId! };
 }
 
+/**
+ * Starts a Cashfree checkout: the amount is computed here from server-side
+ * item prices + promo + delivery fee (never taken from the client), then a
+ * matching Cashfree order is opened. The customer pays in Cashfree's popup;
+ * createCustomerOrder later re-checks with Cashfree that this exact order is PAID.
+ */
+/** How long a customer has to finish paying before the payment is cancelled. */
+export const PAYMENT_WINDOW_SECONDS = 5 * 60;
+
+export async function createCashfreeCheckout(
+  input: CreateRazorpayOrderInput,
+  phone: string
+): Promise<{ cashfreeOrderId: string; paymentSessionId: string; amountPaise: number; mode: "sandbox" | "production"; windowSeconds: number }> {
+  await assertStoreOpen();
+  const resolvedItems = await resolveOrderItems(input.items);
+  assertRumaliHasMain(resolvedItems);
+  const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
+  const promo = input.promoCode ? await validatePromoCodeForOrder(input.promoCode, phone, subtotalOnly) : null;
+  const { subtotal, net } = computeOrderTotals(resolvedItems, promo?.discountType ?? "FLAT", promo?.discountValue ?? 0);
+  const amountPaise = net + (input.orderType === "DELIVERY" ? deliveryFeeFor(subtotal) : 0);
+  if (amountPaise < 100) throw new ValidationError("Online payment needs an order total of at least ₹1.");
+
+  const cfOrder = await createCashfreeOrder({ orderId: newId("cf"), amountPaise, phone });
+  if (!cfOrder.payment_session_id) {
+    throw new AppError(502, "Could not start the payment. Please try again.", "CASHFREE_ERROR", "No payment_session_id in Cashfree response.");
+  }
+  return {
+    cashfreeOrderId: cfOrder.order_id,
+    paymentSessionId: cfOrder.payment_session_id,
+    amountPaise,
+    mode: env.cashfreeEnv,
+    windowSeconds: PAYMENT_WINDOW_SECONDS,
+  };
+}
+
+/**
+ * Called when the 5-minute payment window runs out (or the customer cancels).
+ * If the customer managed to pay at the last second, that's honoured
+ * ({ paid: true } — the app then places the order); otherwise the Cashfree
+ * order is terminated so it can never be paid afterwards.
+ */
+export async function cancelCashfreeCheckout(cashfreeOrderId: string, phone: string): Promise<{ paid: boolean }> {
+  const cf = await fetchCashfreeOrder(cashfreeOrderId);
+  if (cf.customer_details?.customer_phone && cf.customer_details.customer_phone !== tenDigitPhone(phone)) {
+    throw new ForbiddenError("This payment isn't yours.");
+  }
+  if (cf.order_status === "PAID") return { paid: true };
+  if (cf.order_status === "ACTIVE") {
+    try {
+      await terminateCashfreeOrder(cashfreeOrderId);
+    } catch {
+      // A payment may have been mid-flight and Cashfree refused to close the order — check once more before giving up.
+      const again = await fetchCashfreeOrder(cashfreeOrderId);
+      if (again.order_status === "PAID") return { paid: true };
+    }
+  }
+  return { paid: false };
+}
+
+/** Lightweight "has this been paid yet?" for the payment screen to poll (e.g. a QR scanned on another phone). */
+export async function getCashfreeCheckoutStatus(cashfreeOrderId: string, phone: string): Promise<{ paid: boolean; status: string }> {
+  const cf = await fetchCashfreeOrder(cashfreeOrderId);
+  if (cf.customer_details?.customer_phone && cf.customer_details.customer_phone !== tenDigitPhone(phone)) {
+    throw new ForbiddenError("This payment isn't yours.");
+  }
+  return { paid: cf.order_status === "PAID", status: cf.order_status };
+}
+
+/**
+ * Trust nothing from the browser: ask Cashfree directly whether this order is
+ * PAID, for exactly the amount this cart costs, by this customer's phone, and
+ * that it hasn't already paid for a different order.
+ */
+async function verifyCashfreePayment(cashfreeOrderId: string, expectedAmountPaise: number, phone: string): Promise<void> {
+  const cf = await fetchCashfreeOrder(cashfreeOrderId);
+  if (cf.order_status !== "PAID") {
+    throw new ValidationError(
+      cf.order_status === "ACTIVE"
+        ? "Payment wasn't completed, so your order was not placed."
+        : "This payment has expired or failed. Please try again."
+    );
+  }
+  if (Math.round(cf.order_amount * 100) !== expectedAmountPaise) {
+    throw new ValidationError("The paid amount doesn't match your order total. Please contact us.");
+  }
+  if (cf.customer_details?.customer_phone && cf.customer_details.customer_phone !== tenDigitPhone(phone)) {
+    throw new ValidationError("This payment was made for a different number.");
+  }
+  if (await Order.exists({ paymentRef: cashfreeOrderId })) {
+    throw new ValidationError("This payment has already been used for an order.");
+  }
+}
+
 function verifyRazorpaySignature(orderId: string, paymentId: string, signature: string): boolean {
   const expected = crypto
     .createHmac("sha256", env.razorpayKeySecret!)
@@ -74,7 +168,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
   const deliveryLongitude = input.orderType === "DELIVERY" ? input.deliveryLongitude ?? null : null;
   if (input.orderType === "DELIVERY") {
     if (!deliveryAddress) throw new ValidationError("Please enter a delivery address.");
-    if (input.paymentProvider !== "MOCK" && input.paymentProvider !== "COD" && input.paymentProvider !== "RAZORPAY") {
+    if (input.paymentProvider !== "MOCK" && input.paymentProvider !== "COD" && input.paymentProvider !== "RAZORPAY" && input.paymentProvider !== "CASHFREE") {
       throw new ValidationError("Please choose a payment method for delivery.");
     }
     // Real online payment isn't wired up yet — MOCK is a placeholder path
@@ -96,6 +190,12 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
     if (!verifyRazorpaySignature(input.razorpayOrderId, input.razorpayPaymentId, input.razorpaySignature)) {
       throw new ValidationError("Payment could not be verified. Please try again or choose Cash on Delivery.");
     }
+  }
+
+  const isCashfreeDelivery = input.orderType === "DELIVERY" && input.paymentProvider === "CASHFREE";
+  if (isCashfreeDelivery) {
+    if (!input.cashfreeOrderId) throw new ValidationError("Payment details are missing. Please try paying again.");
+    if (!isCashfreeConfigured()) throw new ValidationError("Online payment isn't set up yet — please choose Cash on Delivery.");
   }
 
   // A retried/duplicated submit (double-tap, refresh, network retry) with
@@ -130,6 +230,9 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
     promo?.discountValue ?? 0
   );
   const deliveryFeePaise = input.orderType === "DELIVERY" ? deliveryFeeFor(subtotal) : 0;
+  if (isCashfreeDelivery) {
+    await verifyCashfreePayment(input.cashfreeOrderId!, net + deliveryFeePaise, phone);
+  }
   const now = nowIso();
 
   let orderId: string;
@@ -153,7 +256,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
           // reaches here after "payment" succeeded, and COD is just
           // collected at the door either way.
           status: "PENDING_ACCEPTANCE",
-          paymentStatus: isMockPaidDelivery || isRazorpayDelivery ? "PAID" : "UNPAID",
+          paymentStatus: isMockPaidDelivery || isRazorpayDelivery || isCashfreeDelivery ? "PAID" : "UNPAID",
           customerName,
           customerPhone: phone,
           deliveryAddress,
@@ -172,6 +275,8 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
             ? `[TEST PAYMENT — not real money]${input.notes ? ` ${input.notes}` : ""}`
             : isRazorpayDelivery
               ? `[Paid via Razorpay — TEST MODE]${input.notes ? ` ${input.notes}` : ""}`
+              : isCashfreeDelivery
+              ? `[Paid via Cashfree${env.cashfreeEnv === "sandbox" ? " — TEST MODE" : ""}]${input.notes ? ` ${input.notes}` : ""}`
               : isCodDelivery
               ? `Cash on Delivery${input.notes ? ` — ${input.notes}` : ""}`
               : tableLabel
@@ -182,6 +287,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
           createdAt: now,
           updatedAt: now,
           clientIdempotencyKey: input.idempotencyKey ?? undefined,
+          paymentRef: isCashfreeDelivery ? input.cashfreeOrderId : undefined,
           items,
           payments: [],
           discounts: discounts as OrderDiscountSub[],

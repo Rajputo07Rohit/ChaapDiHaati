@@ -71,6 +71,7 @@ export function POS() {
   const [discountReason, setDiscountReason] = useState("");
   const [notes, setNotes] = useState("");
   const [payOpen, setPayOpen] = useState(false);
+  const [payLaterOpen, setPayLaterOpen] = useState(false);
   const [discountOpen, setDiscountOpen] = useState(false);
   const [discountLineOpen, setDiscountLineOpen] = useState<string | null>(null);
   const [customerName, setCustomerName] = useState(prefill?.prefillCustomerName ?? "");
@@ -277,6 +278,21 @@ export function POS() {
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : "Could not create order");
     },
+  });
+
+  // Dine-in / takeaway "pay later": the order is created and goes to the
+  // kitchen like any other, left UNPAID. Payment is collected afterwards from
+  // Orders -> Collect Payment, which also completes it.
+  const payLaterMutation = useMutation({
+    mutationFn: () => api.post<{ order: SalesOrder }>("/orders", buildOrderPayload()),
+    onSuccess: (res) => {
+      toast.success(`Order #${res.order.order_number} saved — collect payment later from Orders`);
+      setPayLaterOpen(false);
+      resetCart();
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not save order"),
   });
 
   const currentCategory = categories.find((c) => c.id === catToShow);
@@ -640,6 +656,11 @@ export function POS() {
           >
             {orderType === "DELIVERY" ? (createDeliveryOrderMutation.isPending ? "Creating…" : "Create Order") : "Charge & Complete"}
           </Button>
+          {orderType !== "DELIVERY" && (
+            <Button variant="secondary" className="w-full py-2.5" disabled={cart.length === 0 || payLaterMutation.isPending} onClick={() => setPayLaterOpen(true)}>
+              Pay Later
+            </Button>
+          )}
           {cart.length > 0 && (
             <button onClick={() => setCancelCartOpen(true)} className="w-full text-center text-xs text-rose-500 hover:text-rose-600 pt-1">
               Cancel Order
@@ -665,6 +686,26 @@ export function POS() {
         deliveryAddress={deliveryAddress}
         setDeliveryAddress={setDeliveryAddress}
       />
+      <Modal open={payLaterOpen} onClose={() => setPayLaterOpen(false)} title="Pay Later">
+        <div className="space-y-3">
+          <p className="text-sm text-slate-600">
+            Order of <span className="font-semibold text-slate-900">{formatPaise(netTotal)}</span> goes to the kitchen now. Collect payment later from
+            Orders. Note who it's for:
+          </p>
+          <Input placeholder="Customer name (required)" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full" />
+          <Input
+            placeholder="Phone number (optional)"
+            type="tel"
+            inputMode="numeric"
+            value={customerPhone}
+            onChange={(e) => setCustomerPhone(e.target.value)}
+            className="w-full"
+          />
+          <Button className="w-full" disabled={!customerName.trim() || payLaterMutation.isPending} onClick={() => payLaterMutation.mutate()}>
+            {payLaterMutation.isPending ? "Saving…" : "Save Order — Pay Later"}
+          </Button>
+        </div>
+      </Modal>
       <ShareBillModal order={sharingOrder} onClose={() => setSharingOrder(null)} />
 
       <InventoryMissingDialog

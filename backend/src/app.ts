@@ -38,6 +38,8 @@ const apiLimiter = rateLimit({
   limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  // Customer (public) routes have their own limiters below.
+  skip: (req) => req.path.startsWith("/public/"),
 });
 app.use("/api", apiLimiter);
 
@@ -50,8 +52,22 @@ const publicLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: { message: "Too many requests. Please slow down.", code: "RATE_LIMITED" } },
+  // Reads (menu, store open/closed, banners, payment status) are polled by the
+  // app every few seconds and many customers can share one IP (restaurant
+  // Wi-Fi, mobile carriers) — they get the separate, roomier limit below.
+  skip: (req) => req.method === "GET",
 });
 app.use("/api/public", publicLimiter);
+
+const publicReadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method !== "GET",
+  message: { error: { message: "Too many requests. Please slow down.", code: "RATE_LIMITED" } },
+});
+app.use("/api/public", publicReadLimiter);
 
 // Admin-uploaded images (banner carousel, menu item photos). Note: on
 // Render's free tier this disk is ephemeral and wiped on every redeploy —

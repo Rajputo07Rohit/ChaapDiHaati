@@ -56,26 +56,28 @@ export function Menu() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {cat.items.map((item) => (
-                  <button
-                    key={item.id}
-                    className="text-left w-full"
-                    onClick={() => setViewing({ item, categoryName: cat.name })}
-                  >
-                    <Card className="p-3 hover:border-brand-300 hover:shadow-md transition-shadow">
-                      <div className="font-medium text-sm text-slate-800 truncate">{item.name}</div>
-                      <div className="text-xs text-slate-500 space-x-2 mt-0.5">
-                        {item.prices.map((p) => (
-                          <span key={p.price_type}>
-                            {priceLabelFor(item, p.price_type)}: {formatPaise(p.price_paise)}
-                          </span>
-                        ))}
-                        {item.prices.length === 0 && <span className="text-amber-600">No price set</span>}
-                      </div>
-                      {item.status !== "ACTIVE" && (
-                        <Badge tone={item.status === "UNAVAILABLE" ? "yellow" : "red"}>{item.status}</Badge>
-                      )}
-                    </Card>
-                  </button>
+                  <div key={item.id} className="space-y-1.5">
+                    <button
+                      className="text-left w-full"
+                      onClick={() => setViewing({ item, categoryName: cat.name })}
+                    >
+                      <Card className={`p-3 hover:border-brand-300 hover:shadow-md transition-shadow ${item.status === "UNAVAILABLE" ? "opacity-70" : ""}`}>
+                        <div className="font-medium text-sm text-slate-800 truncate">{item.name}</div>
+                        <div className="text-xs text-slate-500 space-x-2 mt-0.5">
+                          {item.prices.map((p) => (
+                            <span key={p.price_type}>
+                              {priceLabelFor(item, p.price_type)}: {formatPaise(p.price_paise)}
+                            </span>
+                          ))}
+                          {item.prices.length === 0 && <span className="text-amber-600">No price set</span>}
+                        </div>
+                        {item.status !== "ACTIVE" && (
+                          <Badge tone={item.status === "UNAVAILABLE" ? "yellow" : "red"}>{item.status === "UNAVAILABLE" ? "OUT OF STOCK" : item.status}</Badge>
+                        )}
+                      </Card>
+                    </button>
+                    {item.status !== "DISCONTINUED" && <StockToggle item={item} onSaved={invalidate} />}
+                  </div>
                 ))}
               </div>
             )}
@@ -294,6 +296,30 @@ function AddonsEditor({ item, onSaved }: { item: MenuItem; onSaved: () => void }
   );
 }
 
+/** One-tap out-of-stock switch: customers see the item greyed out and can't order it. */
+function StockToggle({ item, onSaved }: { item: MenuItem; onSaved: () => void }) {
+  const out = item.status === "UNAVAILABLE";
+  const mutation = useMutation({
+    mutationFn: () => api.patch(`/menu/${item.id}/stock`, { inStock: out }),
+    onSuccess: () => {
+      toast.success(out ? `${item.name} is back in stock` : `${item.name} marked out of stock`);
+      onSaved();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not update item"),
+  });
+  return (
+    <button
+      disabled={mutation.isPending}
+      onClick={() => mutation.mutate()}
+      className={`w-full rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-50 ${
+        out ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600 hover:border-red-300 hover:text-red-600"
+      }`}
+    >
+      {mutation.isPending ? "Saving…" : out ? "Back in stock" : "Mark out of stock"}
+    </button>
+  );
+}
+
 function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onClose: () => void; onSaved: () => void }) {
   const [half, setHalf] = useState("");
   const [full, setFull] = useState("");
@@ -352,7 +378,7 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
           <label className="text-xs font-medium text-slate-500">Status</label>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full">
             <option value="ACTIVE">Active</option>
-            <option value="UNAVAILABLE">Temporarily unavailable</option>
+            <option value="UNAVAILABLE">Out of stock (temporarily unavailable)</option>
             <option value="DISCONTINUED">Discontinued</option>
           </Select>
         </div>

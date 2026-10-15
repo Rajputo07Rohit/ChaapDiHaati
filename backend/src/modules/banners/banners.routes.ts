@@ -9,12 +9,15 @@ import { BannerImage } from "../../db/models";
 import * as bannersService from "./banners.service";
 
 const storage = multer.memoryStorage();
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (_req, file, cb) => {
-    if (!file.mimetype.startsWith("image/")) return cb(new ValidationError("Only image files are allowed."));
+    // Raster images only: an SVG (or anything else) could carry script and is
+    // served from the app's own origin.
+    if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) return cb(new ValidationError("Only JPG, PNG, WebP or GIF images are allowed."));
     cb(null, true);
   },
 });
@@ -93,7 +96,9 @@ bannersPublicRouter.get(
   asyncHandler(async (req, res) => {
     const img = await BannerImage.findById(req.params.id);
     if (!img) return res.status(404).end();
-    res.set("Content-Type", img.contentType);
+    res.set("Content-Type", ALLOWED_IMAGE_TYPES.has(img.contentType) ? img.contentType : "application/octet-stream");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Content-Security-Policy", "default-src 'none'; sandbox");
     res.set("Cache-Control", "public, max-age=86400");
     res.send(img.data);
   })
