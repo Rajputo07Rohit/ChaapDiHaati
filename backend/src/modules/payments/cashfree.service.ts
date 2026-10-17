@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { env } from "../../config/env";
 import { AppError } from "../../utils/errors";
 
@@ -89,4 +90,51 @@ export async function fetchCashfreeOrder(orderId: string): Promise<CashfreeOrder
 /** Closes an unpaid order so it can no longer be paid. Cashfree rejects this if the order is already paid. */
 export async function terminateCashfreeOrder(orderId: string): Promise<CashfreeOrder> {
   return cashfree<CashfreeOrder>(`/orders/${encodeURIComponent(orderId)}`, { method: "PATCH", body: { order_status: "TERMINATED" } });
+}
+
+export interface CashfreeRefund {
+  refund_id: string;
+  order_id: string;
+  refund_amount: number;
+  /** PENDING | SUCCESS | CANCELLED | ONHOLD */
+  refund_status: string;
+  status_description?: string;
+}
+
+/**
+ * Refunds a paid order back to the customer's UPI account. `refundId` is ours
+ * and deterministic per order, so a retry after a timeout can never refund twice:
+ * if Cashfree already has that refund, we just read it back.
+ */
+export async function createCashfreeRefund(input: { orderId: string; refundId: string; amountPaise: number; note: string }): Promise<CashfreeRefund> {
+  try {
+    return await cashfree<CashfreeRefund>(`/orders/${encodeURIComponent(input.orderId)}/refunds`, {
+      method: "POST",
+      body: {
+        refund_id: input.refundId,
+        refund_amount: Number((input.amountPaise / 100).toFixed(2)),
+        refund_note: input.note.slice(0, 100),
+      },
+    });
+  } catch (err) {
+    const existing = await fetchCashfreeRefund(input.orderId, input.refundId).catch(() => null);
+    if (existing) return existing;
+    throw err;
+  }
+}
+
+export async function fetchCashfreeRefund(orderId: string, refundId: string): Promise<CashfreeRefund> {
+  return cashfree<CashfreeRefund>(`/orders/${encodeURIComponent(orderId)}/refunds/${encodeURIComponent(refundId)}`, { method: "GET" });
+}
+
+/**
+ * Webhook authenticity: Cashfree signs `timestamp + rawBody` with our secret key
+ * (HMAC-SHA256, base64). Anything that fails this is ignored.
+ */
+export function verifyCashfreeWebhookSignature(rawBody: string, timestamp: string | undefined, signature: string | undefined): boolean {
+  if (!env.cashfreeSecretKey || !timestamp || !signature) return false;
+  const expected = crypto.createHmac("sha256", env.cashfreeSecretKey).update(timestamp + rawBody).digest("base64");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }

@@ -82,8 +82,11 @@ describe("Cashfree online payment", () => {
     expect(order.net_total_paise).toBe(25000);
     expect((await Order.findById(order.id))!.paymentRef).toBe(co.cashfreeOrderId);
 
-    // 6. the same payment can't buy a second order
-    await expect(place(co.cashfreeOrderId)).rejects.toThrow(/already been used/);
+    // 6. the same payment can't buy a second order — a retry (or the webhook having
+    // created it first) gets the existing order back; another number is refused
+    expect((await place(co.cashfreeOrderId)).id).toBe(order.id);
+    expect(await Order.countDocuments({ paymentRef: co.cashfreeOrderId })).toBe(1);
+    await expect(place(co.cashfreeOrderId, 1, "+919876500002")).rejects.toThrow(/already been used/);
 
     // 7. an unknown / expired payment is rejected
     store.set("cf_expired", { order_id: "cf_expired", order_amount: 250, order_status: "EXPIRED" });

@@ -28,15 +28,26 @@ export const env = {
   // that's configured — requireCustomerAuth/sendOtp report a clear config
   // error rather than the app failing to boot.
   twoFactorApiKey: process.env.TWOFACTOR_API_KEY,
-  // Optional: Razorpay test-mode checkout for customer self-orders. Left
-  // unset until configured — createRazorpayOrder reports a clear config
-  // error rather than the app failing to boot.
-  razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET,
   // Cashfree Payments (UPI / cards / netbanking / wallets). "sandbox" uses
   // Cashfree's test environment — no real money moves. Set CASHFREE_ENV=production
   // together with live keys only when going live.
   cashfreeAppId: process.env.CASHFREE_APP_ID,
   cashfreeSecretKey: process.env.CASHFREE_SECRET_KEY,
   cashfreeEnv: (process.env.CASHFREE_ENV === "production" ? "production" : "sandbox") as "sandbox" | "production",
+  // Optional: browser push notifications to customers (order accepted, on the
+  // way, cancelled + refund…). Generate a pair with `npx web-push generate-vapid-keys`.
+  // Push is simply skipped while unset.
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY,
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY,
+  vapidSubject: process.env.VAPID_SUBJECT || "mailto:owner@chaapdihaati.in",
+  // Optional: WhatsApp order updates via the WhatsApp Business Cloud API (Meta).
+  // Skipped while unset. The template must be approved in WhatsApp Manager first.
+  whatsappToken: process.env.WHATSAPP_TOKEN,
+  whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+  whatsappTemplateName: process.env.WHATSAPP_TEMPLATE_NAME || "order_update",
+  whatsappTemplateLang: process.env.WHATSAPP_TEMPLATE_LANG || "en",
+  // Optional: error reporting to Sentry. Skipped while unset.
+  sentryDsn: process.env.SENTRY_DSN,
+  // Public URL of the customer app — used for links inside notifications.
+  customerAppUrl: (process.env.CUSTOMER_APP_URL || "").replace(/\/$/, ""),
 };

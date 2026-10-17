@@ -50,6 +50,10 @@ settingsRouter.get(
       instagram: await settingsService.getSetting("business_instagram", DEFAULT_INSTAGRAM),
       mapsUrl: await settingsService.getSetting("business_maps_url", DEFAULT_MAPS_URL),
       reviewUrl: await settingsService.getSetting("business_review_url", DEFAULT_REVIEW_URL),
+      // Customer app: "Pure Veg" badge (only shown when the owner turns it on) and the
+      // WhatsApp number behind "Need help?" (falls back to the phone number above).
+      pureVeg: await settingsService.getSetting("business_pure_veg", false),
+      supportWhatsapp: await settingsService.getSetting("business_support_whatsapp", ""),
     });
   })
 );
@@ -76,6 +80,8 @@ const businessProfileSchema = z.object({
     .optional(),
   mapsUrl: httpsLink,
   reviewUrl: httpsLink,
+  pureVeg: z.boolean().optional(),
+  supportWhatsapp: z.string().trim().max(20).regex(/^(\+?\d[\d\s-]{6,16})?$/, "Enter a valid WhatsApp number").optional(),
 });
 
 settingsRouter.put(
@@ -91,6 +97,8 @@ settingsRouter.put(
     await settingsService.setSetting("business_instagram", input.instagram?.trim() ?? "", req.user!.id);
     await settingsService.setSetting("business_maps_url", input.mapsUrl?.trim() ?? "", req.user!.id);
     await settingsService.setSetting("business_review_url", input.reviewUrl?.trim() ?? "", req.user!.id);
+    if (input.pureVeg !== undefined) await settingsService.setSetting("business_pure_veg", input.pureVeg, req.user!.id);
+    if (input.supportWhatsapp !== undefined) await settingsService.setSetting("business_support_whatsapp", input.supportWhatsapp, req.user!.id);
     res.json({ ok: true });
   })
 );
@@ -109,6 +117,10 @@ publicBusinessRouter.get(
       instagram: await settingsService.getSetting("business_instagram", DEFAULT_INSTAGRAM),
       mapsUrl: await settingsService.getSetting("business_maps_url", DEFAULT_MAPS_URL),
       reviewUrl: await settingsService.getSetting("business_review_url", DEFAULT_REVIEW_URL),
+      // Customer app: "Pure Veg" badge (only shown when the owner turns it on) and the
+      // WhatsApp number behind "Need help?" (falls back to the phone number above).
+      pureVeg: await settingsService.getSetting("business_pure_veg", false),
+      supportWhatsapp: await settingsService.getSetting("business_support_whatsapp", ""),
     });
   })
 );

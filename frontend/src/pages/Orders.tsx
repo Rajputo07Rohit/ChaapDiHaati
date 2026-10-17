@@ -4,7 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import toast from "react-hot-toast";
 import { MessageCircle, Phone, MapPin, User as UserIcon, Truck, Calendar, Eye, EyeOff } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import { PaymentMethod, SalesOrder } from "../api/types";
+import { OrderStatus, PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
 import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
@@ -29,6 +29,7 @@ function paymentModeLabel(order: SalesOrder): string {
 }
 
 const LATE_DELIVERY_MINUTES = 45;
+const NOT_SALES_STATUSES: OrderStatus[] = ["CANCELLED", "REFUNDED", "DRAFT", "PENDING_ACCEPTANCE"];
 
 /** Delivery progress for the Orders table: delivered (with how long it took), on the way (turns red when late), or no rider yet. */
 function DeliveryProgress({ order }: { order: SalesOrder }) {
@@ -168,6 +169,22 @@ export function Orders() {
       return isDeliveryOpen(o) && Date.now() - new Date(o.created_at).getTime() > LATE_DELIVERY_MINUTES * 60000;
     });
 
+  // Sales total of the rows on screen — same rule as the backend day summary:
+  // cancelled/refunded/unaccepted orders don't count. With a payment-mode
+  // filter, only the money taken in that mode counts (split payments).
+  const hasListFilter = !!(status || paymentMode || deliveryFilter);
+  const salesOf = (list: SalesOrder[]) =>
+    list
+      .filter((o) => !NOT_SALES_STATUSES.includes(o.status))
+      .reduce(
+        (sum, o) =>
+          sum +
+          (paymentMode
+            ? (o.payments ?? []).filter((p) => p.payment_method_type === paymentMode).reduce((s, p) => s + p.amount_paise, 0)
+            : o.net_total_paise),
+        0
+      );
+
   // Group into date sections so a flat 100-order list doesn't blur today's
   // orders together with yesterday's — this is purely a display grouping,
   // the underlying list/query is unchanged.
@@ -204,6 +221,16 @@ export function Orders() {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not cancel order"),
+  });
+
+  const retryRefundMutation = useMutation({
+    mutationFn: (orderId: string) => api.post(`/orders/${orderId}/retry-refund`),
+    onSuccess: () => {
+      toast.success("Refund sent to Cashfree again");
+      queryClient.invalidateQueries({ queryKey: ["order", selected?.id] });
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not retry the refund"),
   });
 
   const [missingInventory, setMissingInventory] = useState<string[] | null>(null);
@@ -424,9 +451,9 @@ export function Orders() {
                         <span className="tabular-nums">
                           {!canSeeSales ? null : showTotals
                             ? formatPaise(
-                                summary && summary.business_date === date
+                                summary && summary.business_date === date && !hasListFilter
                                   ? summary.sales_paise
-                                  : dateOrders.filter((o) => o.status !== "CANCELLED").reduce((s, o) => s + o.net_total_paise, 0)
+                                  : salesOf(dateOrders)
                               )
                             : "••••••"}
                         </span>
@@ -459,6 +486,7 @@ export function Orders() {
                   </td>
                   <td className="px-4 py-2.5">
                     <PaymentStatusBadge status={o.payment_status} />
+                    <RefundBadge order={o} />
                   </td>
                   <td className="px-4 py-2.5 text-slate-500">{paymentModeLabel(o)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatPaise(o.net_total_paise)}</td>
@@ -681,6 +709,7 @@ export function Orders() {
                     <div className="font-medium">
                       {item.item_name_snapshot} ({item.price_type.toLowerCase()}) × {item.quantity}
                     </div>
+                    {item.special_instructions && <div className="text-xs font-medium text-amber-700">Note: {item.special_instructions}</div>}
                     {item.discount_paise > 0 && (
                       <div className="text-xs text-rose-600">
                         -{formatPaise(item.discount_paise)} ({item.discount_type === "PERCENTAGE" ? `${item.discount_value}%` : "flat"} item discount)
@@ -729,6 +758,28 @@ export function Orders() {
             {detail.order.cancel_reason && (
               <div className="bg-rose-50 text-rose-700 rounded p-2 text-xs">Cancelled: {detail.order.cancel_reason}</div>
             )}
+            {detail.order.refund_status && (
+              <div
+                className={`rounded p-2 text-xs ${
+                  detail.order.refund_status === "FAILED" ? "bg-rose-50 text-rose-700" : detail.order.refund_status === "SUCCESS" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"
+                }`}
+              >
+                <div className="font-semibold">
+                  Online refund {formatPaise(detail.order.refund_amount_paise ?? detail.order.net_total_paise)} —{" "}
+                  {detail.order.refund_status === "SUCCESS" ? "completed" : detail.order.refund_status === "PENDING" ? "processing at Cashfree" : "FAILED"}
+                </div>
+                {detail.order.refund_status === "FAILED" && (
+                  <>
+                    <div className="mt-0.5">{detail.order.refund_error ?? "The refund request didn't go through."} It is retried automatically a few times.</div>
+                    {canManage && (
+                      <Button size="sm" className="mt-2" disabled={retryRefundMutation.isPending} onClick={() => retryRefundMutation.mutate(detail.order.id)}>
+                        Retry refund now
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {customerNoteOf(detail.order.notes) && <div className="text-xs text-slate-400">Note: {customerNoteOf(detail.order.notes)}</div>}
           </div>
         )}
@@ -742,7 +793,10 @@ export function Orders() {
         <div className="space-y-3">
           <p className="text-sm text-slate-500">
             A reason is required. {cancelTarget?.status === "PENDING_ACCEPTANCE" ? "Denied" : "Cancelled"} orders are never counted as sales.
-            {cancelTarget?.payment_status === "PAID" && " Any amount already collected is reversed in the cash/bank ledger — process any gateway-side refund separately."}
+            {cancelTarget?.payment_status === "PAID" &&
+              (/cashfree/i.test(cancelTarget.notes ?? "")
+                ? " This customer paid online — the full amount is refunded to their UPI automatically."
+                : " Any amount already collected is reversed in the cash/bank ledger.")}
           </p>
           <Input placeholder="Reason" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} className="w-full" />
           <Button variant="danger" className="w-full" disabled={!cancelReason || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>
@@ -878,4 +932,13 @@ export function Orders() {
       <CancelNotifyModal notice={cancelNotice} onClose={() => setCancelNotice(null)} />
     </div>
   );
+}
+
+/** Small note under the payment badge when an online refund is in progress or stuck. */
+function RefundBadge({ order }: { order: SalesOrder }) {
+  if (!order.refund_status) return null;
+  const style =
+    order.refund_status === "FAILED" ? "text-rose-600" : order.refund_status === "SUCCESS" ? "text-emerald-600" : "text-amber-600";
+  const label = order.refund_status === "FAILED" ? "Refund failed — open to retry" : order.refund_status === "SUCCESS" ? "Refunded online" : "Refund processing";
+  return <div className={`mt-0.5 text-[11px] font-medium ${style}`}>{label}</div>;
 }

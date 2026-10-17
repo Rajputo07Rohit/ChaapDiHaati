@@ -153,10 +153,10 @@ export async function listUsers() {
   // is that the Staff/Users screen (and every regular admin who can open
   // it) never even knows this account exists.
   const docs = await User.find({ isSuperAdmin: { $ne: true } }).sort({ createdAt: 1 });
-  return docs.map((d) => ({ id: d._id, username: d.username, full_name: d.fullName, role: d.role, active: d.active, created_at: d.createdAt }));
+  return docs.map((d) => ({ id: d._id, username: d.username, full_name: d.fullName, role: d.role, active: d.active, phone: d.phone ?? null, created_at: d.createdAt }));
 }
 
-export async function createUser(input: { username: string; password: string; fullName: string; role: Role }, adminUserId: string): Promise<UserRow> {
+export async function createUser(input: { username: string; password: string; fullName: string; role: Role; phone?: string | null }, adminUserId: string): Promise<UserRow> {
   const existing = await findUserByUsername(input.username);
   if (existing) throw new ConflictError("A user with this username already exists.");
   if (input.password.length < 6) throw new ValidationError("Password must be at least 6 characters.");
@@ -174,6 +174,7 @@ export async function createUser(input: { username: string; password: string; fu
           passwordHash: hash,
           fullName: input.fullName,
           role: input.role,
+          phone: input.phone?.trim() || null,
           active: true,
           createdAt: now,
           updatedAt: now,
@@ -200,7 +201,7 @@ export async function createUser(input: { username: string; password: string; fu
 
 export async function updateUser(
   userId: string,
-  changes: { fullName?: string; role?: Role; active?: boolean; password?: string },
+  changes: { fullName?: string; role?: Role; active?: boolean; password?: string; phone?: string | null },
   adminUserId: string
 ) {
   const existing = await User.findById(userId);
@@ -215,6 +216,9 @@ export async function updateUser(
   await withTransaction(async (session) => {
     if (changes.fullName !== undefined) {
       existing.fullName = changes.fullName;
+    }
+    if (changes.phone !== undefined) {
+      existing.phone = changes.phone?.trim() || null;
     }
     if (changes.role !== undefined && changes.role !== existing.role) {
       const oldRole = existing.role;
@@ -239,5 +243,5 @@ export async function updateUser(
     await existing.save({ session });
   });
 
-  return { id: existing._id, username: existing.username, full_name: existing.fullName, role: existing.role, active: existing.active };
+  return { id: existing._id, username: existing.username, full_name: existing.fullName, role: existing.role, active: existing.active, phone: existing.phone ?? null };
 }

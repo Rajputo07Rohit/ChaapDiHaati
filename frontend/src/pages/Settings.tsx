@@ -35,6 +35,8 @@ function BusinessProfileSection() {
   const [instagram, setInstagram] = useState("");
   const [mapsUrl, setMapsUrl] = useState("");
   const [reviewUrl, setReviewUrl] = useState("");
+  const [pureVeg, setPureVeg] = useState(false);
+  const [supportWhatsapp, setSupportWhatsapp] = useState("");
 
   useEffect(() => {
     if (data) {
@@ -45,11 +47,13 @@ function BusinessProfileSection() {
       setInstagram(data.instagram ?? "");
       setMapsUrl(data.mapsUrl ?? "");
       setReviewUrl(data.reviewUrl ?? "");
+      setPureVeg(!!data.pureVeg);
+      setSupportWhatsapp(data.supportWhatsapp ?? "");
     }
   }, [data]);
 
   const mutation = useMutation({
-    mutationFn: () => api.put("/settings/business-profile", { businessName, tagline, address, phone, instagram, mapsUrl, reviewUrl }),
+    mutationFn: () => api.put("/settings/business-profile", { businessName, tagline, address, phone, instagram, mapsUrl, reviewUrl, pureVeg, supportWhatsapp }),
     onSuccess: () => {
       toast.success("Business profile saved");
       queryClient.invalidateQueries({ queryKey: ["business-profile"] });
@@ -93,11 +97,49 @@ function BusinessProfileSection() {
           <label className="text-xs font-medium text-slate-500">Google review link</label>
           <Input value={reviewUrl} onChange={(e) => setReviewUrl(e.target.value)} className="w-full" placeholder="Opened by the “Rate us on Google” popup after delivery" />
         </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Support WhatsApp number (optional)</label>
+          <Input value={supportWhatsapp} onChange={(e) => setSupportWhatsapp(e.target.value)} className="w-full" placeholder="Customers' “WhatsApp us” button — defaults to the phone above" />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={pureVeg} onChange={(e) => setPureVeg(e.target.checked)} />
+          Show a “Pure Veg” badge in the customer app
+        </label>
         <Button disabled={!businessName || mutation.isPending} onClick={() => mutation.mutate()}>
           {mutation.isPending ? "Saving…" : "Save"}
         </Button>
       </Card>
     </section>
+  );
+}
+
+/** Riders' numbers are shown to the customer whose order they're bringing, so they can call. */
+function UserPhoneCell({ user }: { user: { id: string; phone?: string | null; role: string } }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(user.phone ?? "");
+  const save = useMutation({
+    mutationFn: () => api.patch(`/auth/users/${user.id}`, { phone: value.trim() || null }),
+    onSuccess: () => {
+      toast.success("Phone saved");
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not save phone"),
+  });
+  const dirty = value.trim() !== (user.phone ?? "");
+  return (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={user.role === "RIDER" ? "Needed — shown to customers" : "Optional"}
+        className={`w-40 ${user.role === "RIDER" && !value.trim() ? "border-amber-400" : ""}`}
+      />
+      {dirty && (
+        <Button size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+          Save
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -110,15 +152,17 @@ function UsersSection() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState<Role>("STAFF");
+  const [newPhone, setNewPhone] = useState("");
 
   const createMutation = useMutation({
-    mutationFn: () => api.post("/auth/users", { username, password, fullName, role }),
+    mutationFn: () => api.post("/auth/users", { username, password, fullName, role, phone: newPhone.trim() || null }),
     onSuccess: () => {
       toast.success("User created");
       setModalOpen(false);
       setUsername("");
       setPassword("");
       setFullName("");
+      setNewPhone("");
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not create user"),
@@ -144,6 +188,7 @@ function UsersSection() {
               <th className="text-left px-4 py-2.5">Username</th>
               <th className="text-left px-4 py-2.5">Name</th>
               <th className="text-left px-4 py-2.5">Role</th>
+              <th className="text-left px-4 py-2.5">Phone</th>
               <th className="text-left px-4 py-2.5">Status</th>
               <th className="text-right px-4 py-2.5">Actions</th>
             </tr>
@@ -154,6 +199,9 @@ function UsersSection() {
                 <td className="px-4 py-2.5 font-medium">{u.username}</td>
                 <td className="px-4 py-2.5">{u.full_name}</td>
                 <td className="px-4 py-2.5">{u.role}</td>
+                <td className="px-4 py-2.5">
+                  <UserPhoneCell user={u} />
+                </td>
                 <td className="px-4 py-2.5">
                   <Badge tone={u.active ? "green" : "gray"}>{u.active ? "Active" : "Inactive"}</Badge>
                 </td>
@@ -173,6 +221,12 @@ function UsersSection() {
           <Input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full" />
           <Input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full" />
           <Input placeholder="Full name" value={fullName} onChange={(e) => setFullName(e.target.value)} className="w-full" />
+          <Input
+            placeholder={role === "RIDER" ? "Phone (customers call the rider on this)" : "Phone (optional)"}
+            value={newPhone}
+            onChange={(e) => setNewPhone(e.target.value)}
+            className="w-full"
+          />
           <Select value={role} onChange={(e) => setRole(e.target.value as Role)} className="w-full">
             <option value="STAFF">Staff</option>
             <option value="MANAGER">Manager</option>

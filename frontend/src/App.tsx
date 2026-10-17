@@ -20,6 +20,7 @@ import { Staff } from "./pages/Staff";
 import { SettingsPage } from "./pages/Settings";
 import { Discounts } from "./pages/Discounts";
 import { PromoCodes } from "./pages/PromoCodes";
+import { Feedback } from "./pages/Feedback";
 import { Banners } from "./pages/Banners";
 import { AuditLog } from "./pages/AuditLog";
 import { LoginActivity } from "./pages/LoginActivity";
@@ -79,6 +80,7 @@ export default function App() {
         <Route path="/settings" element={<RequireAuth roles={["ADMIN"]}><SettingsPage /></RequireAuth>} />
         <Route path="/discounts" element={<RequireAuth roles={["ADMIN"]}><Discounts /></RequireAuth>} />
         <Route path="/promo-codes" element={<RequireAuth roles={["ADMIN"]}><PromoCodes /></RequireAuth>} />
+        <Route path="/feedback" element={<RequireAuth roles={["ADMIN", "MANAGER"]}><Feedback /></RequireAuth>} />
         <Route path="/banners" element={<RequireAuth roles={["ADMIN"]}><Banners /></RequireAuth>} />
         <Route path="/audit-log" element={<RequireAuth roles={["ADMIN"]}><AuditLog /></RequireAuth>} />
         <Route path="/login-activity" element={<RequireAuth roles={["ADMIN"]} requireSuperAdmin><LoginActivity /></RequireAuth>} />

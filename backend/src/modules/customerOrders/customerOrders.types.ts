@@ -14,16 +14,11 @@ export interface CreateCustomerOrderInput {
   deliveryLatitude?: number;
   deliveryLongitude?: number;
   /**
-   * Required for DELIVERY. "MOCK" is a placeholder online-payment path for
-   * testing before PhonePe is wired up (blocked in production — see
-   * createCustomerOrder); "COD" is real, collected at the door; "RAZORPAY"
-   * is a real Razorpay checkout running in test mode.
+   * Required for DELIVERY. "COD" is collected at the door; "CASHFREE" is a real
+   * UPI payment verified with Cashfree; "MOCK" is a test-only paid path
+   * (refused in production — see createCustomerOrder).
    */
-  paymentProvider?: "MOCK" | "COD" | "RAZORPAY" | "CASHFREE";
-  /** Required when paymentProvider is "RAZORPAY" — identifies the order created via createRazorpayOrder and the payment to verify against it. */
-  razorpayOrderId?: string;
-  razorpayPaymentId?: string;
-  razorpaySignature?: string;
+  paymentProvider?: "MOCK" | "COD" | "CASHFREE";
   /** Required when paymentProvider is "CASHFREE" — the order created via createCashfreeCheckout, verified server-side against Cashfree before the order is accepted as paid. */
   cashfreeOrderId?: string;
   items: OrderItemInput[];
@@ -34,8 +29,10 @@ export interface CreateCustomerOrderInput {
   promoCode?: string;
 }
 
-export interface CreateRazorpayOrderInput {
-  orderType: "DINE_IN" | "TAKEAWAY" | "DELIVERY";
-  items: OrderItemInput[];
-  promoCode?: string;
-}
+/**
+ * What the app sends when the customer opens online payment: the whole order
+ * they're placing (saved with the payment so it can still be created — or
+ * refunded — if their browser never comes back). Name/address are optional
+ * only for older app versions that sent just the cart.
+ */
+export type CheckoutInput = Omit<CreateCustomerOrderInput, "paymentProvider" | "cashfreeOrderId">;

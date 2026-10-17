@@ -6,6 +6,7 @@ import { requireAuth } from "../../middleware/auth";
 import { isAdminOrSuperAdmin, isAnyRole, isAnyRoleOrRider, isRider } from "../../middleware/rbac";
 import { redactOrderFieldsForRole } from "../../middleware/security";
 import * as ordersService from "./orders.service";
+import * as refundsService from "../payments/refunds.service";
 
 export const ordersRouter = Router();
 ordersRouter.use(redactOrderFieldsForRole);
@@ -110,9 +111,8 @@ ordersRouter.patch(
 
 // Accepts a customer self-order (status PENDING_ACCEPTANCE) into the normal
 // kitchen pipeline. Denying reuses the existing /cancel endpoint below —
-// no separate refund is triggered automatically (see cancelOrder, which
-// already voids/reverses any pre-payment's ledger entry; an actual
-// gateway-side refund for online payments is a manual follow-up for staff).
+// a customer who paid online is refunded through Cashfree automatically
+// (see cancelOrder / refunds.service).
 ordersRouter.post(
   "/:id/accept",
   requireAuth,
@@ -134,6 +134,17 @@ ordersRouter.post(
     const input = cancelSchema.parse(req.body);
     const order = await ordersService.cancelOrder(req.params.id, input.reason, req.user!.id, req.user!.role);
     res.json({ order });
+  })
+);
+
+// A gateway refund that failed (e.g. Cashfree was unreachable) — staff can push it again.
+ordersRouter.post(
+  "/:id/retry-refund",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    await refundsService.retryGatewayRefund(req.params.id, req.user!.id);
+    res.json({ order: await ordersService.getOrderOrThrow(req.params.id) });
   })
 );
 

@@ -36,6 +36,9 @@ function toCustomerOrderResponse(order: OrderRow) {
     created_at: order.created_at,
     confirmed_at: order.confirmed_at,
     prep_time_minutes: order.prep_time_minutes,
+    // Online-payment refund after a cancellation, so the customer knows their money is coming back.
+    refund_status: order.refund_status === "FAILED" ? "PENDING" : order.refund_status,
+    refund_amount_paise: order.refund_amount_paise,
   };
 }
 
@@ -43,16 +46,23 @@ function toCustomerOrderResponse(order: OrderRow) {
  * the summary shape above, still with no cost/internal fields. getOrderOrThrow
  * actually returns items/payments at runtime despite its OrderRow return type
  * (see orders.service.ts), hence the `any` here rather than fighting that. */
-function toCustomerOrderDetailResponse(order: OrderRow & { items?: any[] }) {
+async function toCustomerOrderDetailResponse(order: OrderRow & { items?: any[] }) {
+  const base = toCustomerOrderResponse(order);
+  // Rider contact only while the food is actually on its way to this customer.
+  const onTheWay = base.status === "OUT_FOR_DELIVERY";
   return {
-    ...toCustomerOrderResponse(order),
+    ...base,
+    rider: onTheWay ? await customerOrdersService.getRiderContact(order.assigned_rider_id) : null,
+    feedback: await customerOrdersService.getOrderFeedback(order.id),
     delivery_address: order.delivery_address,
-    items: (order.items ?? []).map((item) => ({
+    items: (order.items ?? []).filter((item) => item.status !== "CANCELLED").map((item) => ({
+      menu_item_id: item.menu_item_id,
       name: item.item_name_snapshot,
       price_type: item.price_type,
       quantity: item.quantity,
       unit_price_paise: item.unit_price_paise,
       line_subtotal_paise: item.line_subtotal_paise,
+      special_instructions: item.special_instructions ?? null,
       addons: (item.addons ?? []).map((a: { name: string; unit_price_paise: number }) => ({
         name: a.name,
         unit_price_paise: a.unit_price_paise,
@@ -65,7 +75,7 @@ const orderItemSchema = z.object({
   menuItemId: z.string(),
   priceType: z.enum(["HALF", "FULL", "SINGLE"]),
   quantity: z.number().int().min(1),
-  specialInstructions: z.string().optional(),
+  specialInstructions: z.string().trim().max(200).optional(),
   addonIds: z.array(z.string()).optional(),
 });
 
@@ -76,22 +86,16 @@ const createOrderSchema = z.object({
   deliveryAddress: z.string().max(500).optional(),
   deliveryLatitude: z.number().min(-90).max(90).optional(),
   deliveryLongitude: z.number().min(-180).max(180).optional(),
-  paymentProvider: z.enum(["MOCK", "COD", "RAZORPAY", "CASHFREE"]).optional(),
-  razorpayOrderId: z.string().optional(),
-  razorpayPaymentId: z.string().optional(),
-  razorpaySignature: z.string().optional(),
+  paymentProvider: z.enum(["MOCK", "COD", "CASHFREE"]).optional(),
   cashfreeOrderId: z.string().max(60).optional(),
   items: z.array(orderItemSchema).min(1),
-  notes: z.string().optional(),
+  notes: z.string().max(500).optional(),
   idempotencyKey: z.string().min(1).max(100).optional(),
   promoCode: z.string().max(30).optional(),
 });
 
-const razorpayOrderSchema = z.object({
-  orderType: z.enum(["DINE_IN", "TAKEAWAY", "DELIVERY"]),
-  items: z.array(orderItemSchema).min(1),
-  promoCode: z.string().max(30).optional(),
-});
+// Online-payment checkout carries the whole order (minus payment fields).
+const checkoutSchema = createOrderSchema.omit({ paymentProvider: true, cashfreeOrderId: true });
 
 // Order history, most recent first — must come before "/:id" isn't needed
 // since this is the bare "/" path, but kept above POST "/" for readability.
@@ -114,7 +118,7 @@ customerOrdersRouter.get(
   requireCustomerAuth,
   asyncHandler(async (req, res) => {
     const order = await customerOrdersService.getCustomerOrderOrThrow(req.params.id, req.customer!.phone);
-    res.json({ order: toCustomerOrderDetailResponse(order) });
+    res.json({ order: await toCustomerOrderDetailResponse(order) });
   })
 );
 
@@ -129,12 +133,14 @@ customerOrdersRouter.post(
 );
 
 customerOrdersRouter.post(
-  "/razorpay-order",
+  "/:id/feedback",
   requireCustomerAuth,
   asyncHandler(async (req, res) => {
-    const input = razorpayOrderSchema.parse(req.body);
-    const result = await customerOrdersService.createRazorpayOrder(input, req.customer!.phone);
-    res.status(201).json(result);
+    const { rating, comment } = z
+      .object({ rating: z.number().int().min(1).max(5), comment: z.string().max(500).optional() })
+      .parse(req.body);
+    await customerOrdersService.submitOrderFeedback(req.params.id, req.customer!.phone, rating, comment ?? null);
+    res.status(201).json({ ok: true });
   })
 );
 
@@ -142,7 +148,7 @@ customerOrdersRouter.post(
   "/cashfree-order",
   requireCustomerAuth,
   asyncHandler(async (req, res) => {
-    const input = razorpayOrderSchema.parse(req.body);
+    const input = checkoutSchema.parse(req.body);
     const result = await customerOrdersService.createCashfreeCheckout(input, req.customer!.phone);
     res.status(201).json(result);
   })

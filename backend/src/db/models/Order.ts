@@ -25,6 +25,8 @@ export type DiscountType = "FLAT" | "PERCENTAGE";
  * cooking" vs "ready" without touching payment or completion at all.
  */
 export type KitchenStatus = "PENDING" | "READY";
+/** Where an automatic online (gateway) refund stands. Null = no gateway refund needed. */
+export type GatewayRefundStatus = "PENDING" | "SUCCESS" | "FAILED";
 
 /** A snapshot of a selected add-on (e.g. "Extra Cheese") at order time —
  * independent of the MenuItem's current addons list, so editing/removing an
@@ -117,6 +119,14 @@ export interface OrderDoc {
   clientIdempotencyKey: string | null;
   /** Gateway order id of the online payment that paid for this order (e.g. the Cashfree order id). Unique, so one payment can never pay for two orders. */
   paymentRef: string | null;
+  /** Automatic refund of an online (Cashfree) payment when a paid order is cancelled. */
+  refundStatus: GatewayRefundStatus | null;
+  refundId: string | null;
+  refundAmountPaise: number | null;
+  refundInitiatedAt: string | null;
+  refundUpdatedAt: string | null;
+  refundAttempts: number;
+  refundError: string | null;
   createdBy: string | null;
   confirmedAt: string | null;
   /** Prep-time estimate (minutes) chosen by staff when accepting a self-order; drives the customer's ETA. */
@@ -219,6 +229,13 @@ const orderSchema = new Schema<OrderDoc>({
   // field entirely unset, or every one of them would collide on `null`.
   clientIdempotencyKey: { type: String },
   paymentRef: { type: String },
+  refundStatus: { type: String, enum: ["PENDING", "SUCCESS", "FAILED", null], default: null },
+  refundId: { type: String, default: null },
+  refundAmountPaise: { type: Number, default: null },
+  refundInitiatedAt: { type: String, default: null },
+  refundUpdatedAt: { type: String, default: null },
+  refundAttempts: { type: Number, required: true, default: 0 },
+  refundError: { type: String, default: null },
   createdBy: { type: String, default: null, ref: "User" },
   confirmedAt: { type: String, default: null },
   prepTimeMinutes: { type: Number, default: null },
@@ -243,6 +260,7 @@ orderSchema.index({ customerPhone: 1, createdAt: -1 });
 // Staff order list filtered by status, newest first.
 orderSchema.index({ status: 1, createdAt: -1 });
 orderSchema.index({ kitchenStatus: 1, createdAt: 1 });
+orderSchema.index({ refundStatus: 1 });
 
 export const Order = model<OrderDoc>("Order", orderSchema);
 

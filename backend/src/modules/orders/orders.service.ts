@@ -15,6 +15,8 @@ import { getPaymentMethodOrThrow } from "../paymentMethods/paymentMethods.servic
 import { formatPaise } from "../../utils/money";
 import { Role } from "../../types/express";
 import { CompleteOrderInput, CreateOrderInput, DiscountType, OrderItemInput, OrderStatus, PaymentInput, PaymentStatus } from "./orders.types";
+import { flagGatewayRefund, startGatewayRefund } from "../payments/refunds.service";
+import { notifyOrderEvent } from "../notifications/notify.service";
 
 const EDITABLE_STATUSES: OrderStatus[] = ["DRAFT", "CONFIRMED", "PREPARING", "READY"];
 const COMPLETABLE_STATUSES: OrderStatus[] = ["CONFIRMED", "PREPARING", "READY", "OUT_FOR_DELIVERY"];
@@ -54,6 +56,11 @@ export interface OrderRow {
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
+  /** Online-payment refund after a cancellation: PENDING (with the gateway) | SUCCESS | FAILED (needs a retry) | null. */
+  refund_status: "PENDING" | "SUCCESS" | "FAILED" | null;
+  refund_amount_paise: number | null;
+  refund_error: string | null;
+  refund_updated_at: string | null;
   created_by: string | null;
   confirmed_at: string | null;
   prep_time_minutes: number | null;
@@ -92,6 +99,10 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
+    refund_status: doc.refundStatus ?? null,
+    refund_amount_paise: doc.refundAmountPaise ?? null,
+    refund_error: doc.refundError ?? null,
+    refund_updated_at: doc.refundUpdatedAt ?? null,
     created_by: doc.createdBy,
     confirmed_at: doc.confirmedAt,
     prep_time_minutes: doc.prepTimeMinutes ?? null,
@@ -640,6 +651,7 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
   await assertBusinessDateWritable(order.businessDate, role);
 
   const now = nowIso();
+  let needsGatewayRefund = false;
 
   await withTransaction(async (session) => {
     const doc = (await Order.findById(orderId).session(session))!;
@@ -689,7 +701,10 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
     // Every payment on the order was just voided and refunded above — the
     // order can't still show as PAID/PARTIAL after that, or the Orders
     // list shows the confusing "CANCELLED" + "PAID" combination.
-    doc.paymentStatus = activePayments.length > 0 ? "REFUNDED" : "UNPAID";
+    // A customer who paid online (Cashfree) gets their money back automatically —
+    // the gateway call itself happens right after this commits.
+    needsGatewayRefund = flagGatewayRefund(doc);
+    doc.paymentStatus = activePayments.length > 0 || needsGatewayRefund ? "REFUNDED" : "UNPAID";
     await doc.save({ session });
 
     await recordAudit(
@@ -699,12 +714,15 @@ export async function cancelOrder(orderId: string, reason: string, userId: strin
         entityType: "sales_order",
         entityId: orderId,
         oldValue: { status: oldStatus },
-        newValue: { status: "CANCELLED" },
+        newValue: { status: "CANCELLED", gatewayRefund: needsGatewayRefund },
         reason,
       },
       session
     );
   });
+
+  if (needsGatewayRefund) await startGatewayRefund(orderId, userId ?? null);
+  notifyOrderEvent(orderId, "CANCELLED");
 
   return getOrderOrThrow(orderId);
 }
@@ -748,6 +766,7 @@ export async function acceptOrder(orderId: string, userId: string, prepTimeMinut
     }
   }
 
+  notifyOrderEvent(orderId, "ACCEPTED");
   return getOrderOrThrow(orderId);
 }
 
@@ -1095,7 +1114,8 @@ export async function markKitchenReady(orderId: string, userId: string): Promise
     throw new ConflictError(`Cannot mark an order that is ${order.status.toLowerCase().replace(/_/g, " ")} as ready.`);
   }
 
-  if (order.kitchenStatus !== "READY") {
+  const newlyReady = order.kitchenStatus !== "READY";
+  if (newlyReady) {
     const now = nowIso();
     order.kitchenStatus = "READY";
     order.kitchenReadyAt = now;
@@ -1120,7 +1140,14 @@ export async function markKitchenReady(orderId: string, userId: string): Promise
     }
   }
 
-  return { order: await getOrderOrThrow(orderId), dispatchWarning };
+  const result = await getOrderOrThrow(orderId);
+  if (newlyReady) {
+    // A rider picked in this same tap was already announced by assignRider; only
+    // a rider who was assigned earlier (waiting for the food) is announced here.
+    if (result.order_type !== "DELIVERY") notifyOrderEvent(orderId, "READY_FOR_PICKUP");
+    else if (result.status === "OUT_FOR_DELIVERY" && order.assignedRiderId) notifyOrderEvent(orderId, "ON_THE_WAY");
+  }
+  return { order: result, dispatchWarning };
 }
 
 /**
@@ -1225,6 +1252,7 @@ export async function markDelivered(
     stockWarnings = await finalizeOrder(doc, userId, role, session, { bypassMissingInventory: opts.bypassMissingInventory });
   });
 
+  notifyOrderEvent(orderId, "DELIVERED");
   return { order: await getOrderOrThrow(orderId), stockWarnings };
 }
 
@@ -1386,5 +1414,9 @@ export async function assignRider(orderId: string, requestedRiderId: string | nu
     newValue: { assignedRiderId: riderId, status: order.status },
   });
 
+  // The food was already cooked and waiting for a rider — it leaves now.
+  if (order.kitchenStatus === "READY" && (oldStatus !== "OUT_FOR_DELIVERY" || oldRiderId !== riderId)) {
+    notifyOrderEvent(orderId, "ON_THE_WAY");
+  }
   return getOrderOrThrow(orderId);
 }

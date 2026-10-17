@@ -149,6 +149,10 @@ export interface SalesOrder {
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
+  /** Automatic online (Cashfree) refund after a paid order is cancelled. FAILED needs a retry. */
+  refund_status?: "PENDING" | "SUCCESS" | "FAILED" | null;
+  refund_amount_paise?: number | null;
+  refund_error?: string | null;
   created_at: string;
   items?: SalesOrderItem[];
   payments?: Payment[];
@@ -170,6 +174,10 @@ export interface BusinessProfile {
   instagram?: string;
   mapsUrl?: string;
   reviewUrl?: string;
+  /** Customer app: show a "Pure Veg" badge. */
+  pureVeg?: boolean;
+  /** Customer app "Need help?" WhatsApp number (falls back to phone). */
+  supportWhatsapp?: string;
 }
 
 export interface Supplier {

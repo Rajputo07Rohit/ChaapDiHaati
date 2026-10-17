@@ -69,7 +69,13 @@ describe("Security / abuse protections", () => {
     expect(info.instagram).toBe("desi_chaap_di_hatti_bit");
     expect(info.mapsUrl).toBe("https://maps.app.goo.gl/VUCj22HZXYZkSA1K6");
     // nothing secret leaks through the public endpoint
-    expect(Object.keys(info).sort()).toEqual(["address", "businessName", "instagram", "mapsUrl", "phone", "reviewUrl", "tagline"]);
+    expect(Object.keys(info).sort()).toEqual(["address", "businessName", "instagram", "mapsUrl", "phone", "pureVeg", "reviewUrl", "supportWhatsapp", "tagline"]);
+    // the support WhatsApp number is a phone number, nothing else
+    expect((await put({ supportWhatsapp: "https://wa.me/evil" })).status).toBe(400);
+    expect((await put({ supportWhatsapp: "+91 98765 43210", pureVeg: true })).status).toBe(200);
+    const info2 = (await request(app).get("/api/public/business-info")).body;
+    expect(info2.supportWhatsapp).toBe("+91 98765 43210");
+    expect(info2.pureVeg).toBe(true);
   }, 30_000);
 
   it("banner uploads accept real images only, and served images can't run script", async () => {

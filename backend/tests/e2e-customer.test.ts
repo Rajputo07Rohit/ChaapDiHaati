@@ -91,7 +91,7 @@ describe("Customer self-order flow (e2e, in-memory DB)", () => {
     const leakedKeys = ["cogs_paise", "created_by", "discount_reason", "items", "payments"];
     for (const k of leakedKeys) expect(dineIn.body.order).not.toHaveProperty(k);
     expect(Object.keys(dineIn.body.order).sort()).toEqual(
-      ["cancel_reason", "confirmed_at", "created_at", "delivery_fee_paise", "discount_paise", "id", "net_total_paise", "notes", "order_number", "order_type", "payment_status", "prep_time_minutes", "status", "subtotal_paise"].sort()
+      ["cancel_reason", "confirmed_at", "created_at", "delivery_fee_paise", "discount_paise", "id", "net_total_paise", "notes", "order_number", "order_type", "payment_status", "prep_time_minutes", "refund_amount_paise", "refund_status", "status", "subtotal_paise"].sort()
     );
     console.log("[OK] DINE_IN order created, correct total, no internal fields leaked:", dineIn.body.order);
 

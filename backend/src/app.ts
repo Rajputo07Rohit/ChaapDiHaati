@@ -7,6 +7,8 @@ import { env } from "./config/env";
 import { apiRouter } from "./routes";
 import { errorHandler } from "./middleware/errorHandler";
 import { securityHeaders, noStoreApi } from "./middleware/security";
+import { cashfreeWebhookRouter } from "./modules/payments/webhook.routes";
+import mongoose from "mongoose";
 
 export const app = express();
 
@@ -21,6 +23,9 @@ app.use(securityHeaders);
 app.use("/api", noStoreApi);
 
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
+// Server-to-server from Cashfree: signature-checked on the raw body, so it's
+// mounted before express.json and outside the per-IP customer rate limits.
+app.use("/api/public/payments/cashfree/webhook", cashfreeWebhookRouter);
 app.use(express.json({ limit: "100kb" }));
 app.use(cookieParser());
 
@@ -75,7 +80,12 @@ app.use("/api/public", publicReadLimiter);
 // object store (S3/Cloudinary) swapped in here before that matters.
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+// For an uptime monitor (e.g. UptimeRobot every 5 min): 503 when the database is
+// unreachable, so an outage is noticed before customers report it.
+app.get("/api/health", (_req, res) => {
+  const dbUp = mongoose.connection.readyState === 1;
+  res.status(dbUp ? 200 : 503).json({ ok: dbUp, db: dbUp ? "up" : "down", time: new Date().toISOString() });
+});
 
 app.use("/api", apiRouter);
 

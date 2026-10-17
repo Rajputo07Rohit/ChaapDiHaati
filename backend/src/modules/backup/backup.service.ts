@@ -39,6 +39,16 @@ const BACKED_UP_MODELS: Model<any>[] = [
   models.AuditLog,
   models.Counter,
   models.HistoricalItemSale,
+  models.DiscountRule,
+  models.PromoCode,
+  models.Banner,
+  models.BannerImage,
+  models.LoginEvent,
+  // Customer app: saved checkouts (payment ↔ order/refund trail), profiles, ratings, push subscriptions.
+  models.CheckoutSession,
+  models.CustomerProfile,
+  models.OrderFeedback,
+  models.PushSubscription,
 ];
 
 /**

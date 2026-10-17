@@ -90,6 +90,7 @@ const createUserSchema = z.object({
   password: z.string().min(6),
   fullName: z.string().min(1),
   role: z.enum(["ADMIN", "MANAGER", "STAFF", "RIDER"]),
+  phone: z.string().trim().regex(/^(\+?\d[\d\s-]{6,16})?$/, "Enter a valid phone number.").nullable().optional(),
 });
 
 authRouter.get(
@@ -117,6 +118,7 @@ const updateUserSchema = z.object({
   role: z.enum(["ADMIN", "MANAGER", "STAFF", "RIDER"]).optional(),
   active: z.boolean().optional(),
   password: z.string().min(6).optional(),
+  phone: z.string().trim().regex(/^(\+?\d[\d\s-]{6,16})?$/, "Enter a valid phone number.").nullable().optional(),
 });
 
 authRouter.patch(

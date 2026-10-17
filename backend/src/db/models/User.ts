@@ -13,6 +13,8 @@ export interface UserDoc {
    * Users screens. Only an account with this set can see Login Activity,
    * regardless of its role. */
   isSuperAdmin: boolean;
+  /** Contact number — for riders it's shown to the customer whose order they're delivering. */
+  phone: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -25,6 +27,7 @@ const schema = new Schema<UserDoc>({
   role: { type: String, required: true, enum: ["ADMIN", "MANAGER", "STAFF", "RIDER"] },
   active: { type: Boolean, required: true, default: true },
   isSuperAdmin: { type: Boolean, required: true, default: false },
+  phone: { type: String, default: null },
   createdAt: { type: String, required: true },
   updatedAt: { type: String, required: true },
 });

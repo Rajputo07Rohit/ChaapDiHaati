@@ -51,3 +51,24 @@ export async function updatePaymentMethod(id: string, changes: { active?: boolea
   await doc.save();
   return toRow(doc);
 }
+
+/** Name of the method customer-app UPI payments (via Cashfree) are booked under. */
+export const CASHFREE_METHOD_NAME = "Cashfree (online order)";
+
+/**
+ * The payment method online customer orders are booked under. Created on first
+ * use and kept inactive, so it never shows up as a choice on the POS — it's only
+ * ever posted automatically, when Cashfree confirms a payment.
+ */
+export async function getCashfreePaymentMethodId(): Promise<string> {
+  const existing = await PaymentMethod.findOne({ name: CASHFREE_METHOD_NAME }).select("_id").lean();
+  if (existing) return existing._id;
+  try {
+    const id = newId("pm");
+    await PaymentMethod.create({ _id: id, name: CASHFREE_METHOD_NAME, type: "ONLINE", active: false, sortOrder: 99 });
+    return id;
+  } catch {
+    // Created at the same moment by another request (unique name) — use that one.
+    return (await PaymentMethod.findOne({ name: CASHFREE_METHOD_NAME }).select("_id").lean())!._id;
+  }
+}

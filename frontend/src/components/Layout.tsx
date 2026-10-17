@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
@@ -18,6 +18,7 @@ import {
   History,
   Percent,
   Tag,
+  Star,
   Image as ImageIcon,
   ChefHat,
   ShieldCheck,
@@ -29,6 +30,8 @@ import {
   Contrast,
   Bell,
   Globe,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { Role } from "../api/types";
@@ -61,6 +64,7 @@ const NAV: NavItem[] = [
   { to: "/daily-closing", label: "Daily Closing", icon: CalendarCheck, roles: ["ADMIN", "MANAGER"] },
   { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["ADMIN", "MANAGER"] },
   { to: "/staff", label: "Staff", icon: Users, roles: ["ADMIN", "MANAGER"] },
+  { to: "/feedback", label: "Customer Feedback", icon: Star, roles: ["ADMIN", "MANAGER"] },
   { to: "/discounts", label: "Discounts", icon: Percent, roles: ["ADMIN"] },
   { to: "/promo-codes", label: "Promo Codes", icon: Tag, roles: ["ADMIN"] },
   { to: "/banners", label: "Banners", icon: ImageIcon, roles: ["ADMIN"] },
@@ -75,6 +79,29 @@ export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const pendingCount = usePendingCount();
   const [theme, setTheme] = useState<AppTheme>(getStoredTheme);
+  const { pathname } = useLocation();
+  // Desktop-only: shrink the sidebar to an icon rail. Remembered per browser.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("sidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  function toggleCollapsed() {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem("sidebarCollapsed", c ? "0" : "1");
+      } catch {
+        /* storage unavailable — keep in-memory state only */
+      }
+      return !c;
+    });
+  }
+  // Labels/extras hidden on desktop while collapsed (mobile drawer always shows them).
+  const hideWhenCollapsed = collapsed ? "lg:hidden" : "";
+  // Boards like Kitchen want every pixel of width, not the centred 1400px column.
+  const fullWidth = pathname === "/kitchen";
 
   useEffect(() => {
     applyTheme(theme);
@@ -91,10 +118,17 @@ export function Layout() {
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Top bar */}
-      <div className="fixed top-0 inset-x-0 lg:left-64 h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 z-40">
+      <div className={`fixed top-0 inset-x-0 ${collapsed ? "lg:left-16" : "lg:left-64"} h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 z-40`}>
         <div className="flex items-center gap-3">
           <button onClick={() => setMobileOpen(true)} className="text-slate-600 lg:hidden">
             <MenuIcon size={22} />
+          </button>
+          <button
+            onClick={toggleCollapsed}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="hidden lg:inline-flex text-slate-500 hover:text-slate-800"
+          >
+            {collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
           </button>
           <span className="font-semibold text-brand-700 flex items-center gap-2 lg:hidden">
             <img src={logo} alt="" className="w-7 h-7 object-contain" />
@@ -120,14 +154,14 @@ export function Layout() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-slate-200 flex flex-col transform transition-transform lg:transform-none ${
+        className={`fixed lg:static inset-y-0 left-0 z-50 w-64 ${collapsed ? "lg:w-16" : ""} bg-slate-900 text-slate-200 flex flex-col transform transition-transform lg:transform-none ${
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         }`}
       >
-        <div className="h-16 flex items-center justify-between px-4 border-b border-slate-800">
+        <div className={`h-16 flex items-center justify-between px-4 border-b border-slate-800 ${collapsed ? "lg:justify-center lg:px-0" : ""}`}>
           <div className="flex items-center gap-2.5 min-w-0">
             <img src={logo} alt="" className="w-9 h-9 object-contain shrink-0" />
-            <div className="min-w-0">
+            <div className={`min-w-0 ${hideWhenCollapsed}`}>
               <div className="font-bold text-white leading-tight truncate">Chaap Di Haati</div>
               <div className="text-[11px] text-slate-400">Restaurant Management</div>
             </div>
@@ -142,16 +176,20 @@ export function Layout() {
               key={item.to}
               to={item.to}
               onClick={() => setMobileOpen(false)}
+              title={collapsed ? item.label : undefined}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                `relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${collapsed ? "lg:justify-center lg:px-0" : ""} ${
                   isActive ? "bg-brand-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"
                 }`
               }
             >
-              <item.icon size={18} />
-              <span className="flex-1">{item.label}</span>
+              <item.icon size={18} className="shrink-0" />
+              <span className={`flex-1 ${hideWhenCollapsed}`}>{item.label}</span>
+              {item.to === "/web-orders" && pendingCount > 0 && collapsed && (
+                <span className="absolute top-1 right-2 hidden lg:block h-2.5 w-2.5 rounded-full bg-red-600" />
+              )}
               {item.to === "/web-orders" && pendingCount > 0 && (
-                <span className="min-w-[1.5rem] rounded-full bg-red-600 px-2 py-0.5 text-center text-xs font-bold text-white">
+                <span className={`${hideWhenCollapsed} min-w-[1.5rem] rounded-full bg-red-600 px-2 py-0.5 text-center text-xs font-bold text-white`}>
                   {pendingCount}
                 </span>
               )}
@@ -159,12 +197,12 @@ export function Layout() {
           ))}
         </nav>
         <div className="p-3 border-t border-slate-800">
-          <div className="px-3 py-2 text-xs text-slate-400">
+          <div className={`px-3 py-2 text-xs text-slate-400 ${hideWhenCollapsed}`}>
             <div className="font-medium text-slate-200">{user.fullName}</div>
             <div>{user.role}</div>
           </div>
-          {user.role !== "RIDER" && <StoreQuickToggle />}
-          <div className="px-3 pb-2">
+          {user.role !== "RIDER" && <div className={hideWhenCollapsed}><StoreQuickToggle /></div>}
+          <div className={`px-3 pb-2 ${hideWhenCollapsed}`}>
             <div className="text-[11px] text-slate-500 uppercase tracking-wide mb-1.5">Theme</div>
             <div className="grid grid-cols-3 gap-1 bg-slate-800 rounded-lg p-1">
               {(
@@ -190,9 +228,10 @@ export function Layout() {
           </div>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 hover:text-white"
+            title={collapsed ? "Log out" : undefined}
+            className={`w-full flex items-center gap-2 ${collapsed ? "lg:justify-center lg:px-0" : ""} px-3 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800 hover:text-white`}
           >
-            <LogOut size={16} /> Log out
+            <LogOut size={16} /> <span className={hideWhenCollapsed}>Log out</span>
           </button>
         </div>
       </aside>
@@ -200,7 +239,7 @@ export function Layout() {
       {mobileOpen && <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />}
 
       <main className="flex-1 overflow-y-auto pt-14">
-        <div className="max-w-[1400px] mx-auto p-4 md:p-8">
+        <div className={fullWidth ? "p-3 md:p-4" : "max-w-[1400px] mx-auto p-4 md:p-8"}>
           <Outlet />
         </div>
       </main>
