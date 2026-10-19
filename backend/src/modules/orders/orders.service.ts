@@ -53,6 +53,7 @@ export interface OrderRow {
   item_discount_total_paise: number;
   discount_reason: string | null;
   delivery_fee_paise: number;
+  packing_fee_paise: number;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
@@ -96,6 +97,7 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     item_discount_total_paise: doc.itemDiscountTotalPaise,
     discount_reason: doc.discountReason,
     delivery_fee_paise: doc.deliveryFeePaise,
+    packing_fee_paise: doc.packingFeePaise ?? 0,
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
@@ -620,7 +622,8 @@ export async function updateOrderItems(orderId: string, input: CreateOrderInput,
     doc.discountValue = orderDiscountValue;
     doc.itemDiscountTotalPaise = itemDiscountTotal;
     doc.discountReason = input.discountReason ?? null;
-    doc.netTotalPaise = net;
+    // Keep the packing charge the customer already agreed to when staff edit the items.
+    doc.netTotalPaise = net + (doc.packingFeePaise ?? 0);
     if (input.notes !== undefined) doc.notes = input.notes;
     doc.updatedAt = now;
     await doc.save({ session });

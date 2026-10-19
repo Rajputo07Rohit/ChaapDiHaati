@@ -27,6 +27,7 @@ function toCustomerOrderResponse(order: OrderRow) {
     net_total_paise: order.net_total_paise,
     subtotal_paise: order.subtotal_paise,
     delivery_fee_paise: order.delivery_fee_paise,
+    packing_fee_paise: order.packing_fee_paise,
     discount_paise: order.discount_paise,
     // Cancelled/denied orders are the one case a customer has a real reason
     // to see internal-ish text — why their order didn't go through. Null
@@ -92,6 +93,7 @@ const createOrderSchema = z.object({
   notes: z.string().max(500).optional(),
   idempotencyKey: z.string().min(1).max(100).optional(),
   promoCode: z.string().max(30).optional(),
+  packing: z.boolean().optional(),
 });
 
 // Online-payment checkout carries the whole order (minus payment fields).

@@ -52,14 +52,14 @@ async function assertOrderingOpenToday() {
   }
 }
 
-/** Server-side price of a cart: items + promo + delivery fee. Never taken from the client. */
-async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "promoCode">, phone: string): Promise<number> {
+/** Server-side price of a cart: items + promo + delivery fee + packing fee. Never taken from the client. */
+async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "promoCode" | "packing">, phone: string): Promise<number> {
   const resolvedItems = await resolveOrderItems(input.items);
   assertRumaliHasMain(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const promo = input.promoCode ? await validatePromoCodeForOrder(input.promoCode, phone, subtotalOnly) : null;
   const { subtotal, net } = computeOrderTotals(resolvedItems, promo?.discountType ?? "FLAT", promo?.discountValue ?? 0);
-  return net + (input.orderType === "DELIVERY" ? deliveryFeeFor(subtotal) : 0);
+  return net + (input.orderType === "DELIVERY" ? deliveryFeeFor(subtotal) : 0) + packingFeeFor(input.orderType, input.packing, resolvedItems);
 }
 
 /**
@@ -344,11 +344,13 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
     promo?.discountValue ?? 0
   );
   const deliveryFeePaise = input.orderType === "DELIVERY" ? deliveryFeeFor(subtotal) : 0;
+  const packingFeePaise = packingFeeFor(input.orderType, input.packing, resolvedItems);
+  const totalPaise = net + deliveryFeePaise + packingFeePaise;
   // Cashfree's money is booked as a real payment (order payment line + bank credit),
   // so day totals and the bank balance include it — and a cancellation reverses it.
   const cashfreeMethodId = isCashfreeDelivery ? await getCashfreePaymentMethodId() : null;
   if (isCashfreeDelivery) {
-    await verifyCashfreePayment(input.cashfreeOrderId!, net + deliveryFeePaise, phone);
+    await verifyCashfreePayment(input.cashfreeOrderId!, totalPaise, phone);
   }
   const now = nowIso();
 
@@ -387,7 +389,8 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
           promoCode: promo?.code ?? null,
           itemDiscountTotalPaise: itemDiscountTotal,
           deliveryFeePaise,
-          netTotalPaise: net + deliveryFeePaise,
+          packingFeePaise,
+          netTotalPaise: totalPaise,
           notes: isMockPaidDelivery
             ? `[TEST PAYMENT — not real money]${input.notes ? ` ${input.notes}` : ""}`
             : isCashfreeDelivery
@@ -409,7 +412,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
                 {
                   _id: newId("pay"),
                   paymentMethodId: cashfreeMethodId,
-                  amountPaise: net + deliveryFeePaise,
+                  amountPaise: totalPaise,
                   reference: input.cashfreeOrderId,
                   status: "ACTIVE",
                   createdBy: null,
@@ -428,7 +431,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
         {
           businessDate,
           txnType: "CREDIT",
-          amountPaise: net + deliveryFeePaise,
+          amountPaise: totalPaise,
           description: `Sale — order #${orderNumber} (paid online via Cashfree)`,
           reference: input.cashfreeOrderId,
           category: "BUSINESS",
@@ -445,7 +448,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
         action: "CUSTOMER_ORDER_CREATED",
         entityType: "sales_order",
         entityId: newOrderId,
-        newValue: { orderNumber, subtotal, net, itemCount: resolvedItems.length, phone, orderType: input.orderType, promoCode: promo?.code ?? null },
+        newValue: { orderNumber, subtotal, net, packingFeePaise, itemCount: resolvedItems.length, phone, orderType: input.orderType, promoCode: promo?.code ?? null },
       },
       session
     );
@@ -592,4 +595,12 @@ function deliveryFeeFor(subtotalPaise: number): number {
   if (subtotalPaise < 10000) return 4000;
   if (subtotalPaise < 15000) return 3000;
   return 0;
+}
+
+/** Packing charge per plate: ₹5 per half plate, ₹9 per full plate. Only for takeaway/delivery, and only when the customer kept packing on. */
+const PACKING_FEE_PAISE = { HALF: 500, FULL: 900, SINGLE: 0 } as const;
+
+function packingFeeFor(orderType: string, packing: boolean | undefined, items: { priceType: "HALF" | "FULL" | "SINGLE"; quantity: number }[]): number {
+  if (orderType === "DINE_IN" || !packing) return 0;
+  return items.reduce((s, i) => s + PACKING_FEE_PAISE[i.priceType] * i.quantity, 0);
 }

@@ -27,6 +27,8 @@ export interface CreateCustomerOrderInput {
   idempotencyKey?: string;
   /** Re-validated server-side against this exact order (subtotal, phone, expiry, usage limits) — never trusted as already-applied. */
   promoCode?: string;
+  /** Takeaway/delivery only: whether the customer wants their plates packed (charged per half/full plate — see packingFeeFor). Older app versions don't send it, so it's never charged for them. */
+  packing?: boolean;
 }
 
 /**
