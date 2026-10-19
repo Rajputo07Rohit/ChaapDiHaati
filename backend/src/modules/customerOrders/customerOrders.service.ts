@@ -11,7 +11,7 @@ import { CheckoutInput, CreateCustomerOrderInput } from "./customerOrders.types"
 import { ForbiddenError } from "../../utils/errors";
 import { validatePromoCodeForOrder } from "../promoCodes/promoCodes.service";
 import { PromoCode } from "../../db/models";
-import { assertRumaliHasMain, assertStoreOpen } from "../storeStatus/storeStatus.service";
+import { assertBeveragesHaveFood, assertRumaliHasMain, assertStoreOpen } from "../storeStatus/storeStatus.service";
 import {
   createCashfreeOrder,
   createCashfreeRefund,
@@ -56,6 +56,7 @@ async function assertOrderingOpenToday() {
 async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "promoCode" | "packing">, phone: string): Promise<number> {
   const resolvedItems = await resolveOrderItems(input.items);
   assertRumaliHasMain(resolvedItems);
+  assertBeveragesHaveFood(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const promo = input.promoCode ? await validatePromoCodeForOrder(input.promoCode, phone, subtotalOnly) : null;
   const { subtotal, net } = computeOrderTotals(resolvedItems, promo?.discountType ?? "FLAT", promo?.discountValue ?? 0);
@@ -333,6 +334,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
 
   const resolvedItems = await resolveOrderItems(input.items);
   assertRumaliHasMain(resolvedItems);
+  assertBeveragesHaveFood(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   // Re-validated here even though createCashfreeCheckout already checked it —
   // this is the call that actually commits, so it can never trust a
@@ -597,10 +599,14 @@ function deliveryFeeFor(subtotalPaise: number): number {
   return 0;
 }
 
-/** Packing charge per plate: ₹5 per half plate, ₹9 per full plate. Only for takeaway/delivery, and only when the customer kept packing on. */
+/** Packing charge per plate: ₹5 per half plate, ₹9 per full plate. Only for takeaway/delivery, only when the customer kept packing on, and never for rolls. */
 const PACKING_FEE_PAISE = { HALF: 500, FULL: 900, SINGLE: 0 } as const;
 
-function packingFeeFor(orderType: string, packing: boolean | undefined, items: { priceType: "HALF" | "FULL" | "SINGLE"; quantity: number }[]): number {
+function packingFeeFor(
+  orderType: string,
+  packing: boolean | undefined,
+  items: { priceType: "HALF" | "FULL" | "SINGLE"; quantity: number; categoryName: string | null }[]
+): number {
   if (orderType === "DINE_IN" || !packing) return 0;
-  return items.reduce((s, i) => s + PACKING_FEE_PAISE[i.priceType] * i.quantity, 0);
+  return items.reduce((s, i) => s + (/roll/i.test(i.categoryName ?? "") ? 0 : PACKING_FEE_PAISE[i.priceType] * i.quantity), 0);
 }

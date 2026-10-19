@@ -208,3 +208,19 @@ export function assertRumaliHasMain(items: { itemName: string; categoryName: str
     );
   }
 }
+
+/**
+ * Beverages are only sold alongside food: a cart of just drinks (optionally
+ * with extras like cream/cheese/plate) is refused. Any food item — chaap,
+ * paneer, momo, a roll, bread — unlocks them. Matched by category name.
+ */
+const BEVERAGE_CATEGORY_RE = /beverage|drink/i;
+const NOT_FOOD_CATEGORY_RE = /beverage|drink|extra/i;
+
+export function assertBeveragesHaveFood(items: { categoryName: string | null }[]): void {
+  const hasBeverage = items.some((i) => BEVERAGE_CATEGORY_RE.test(i.categoryName ?? ""));
+  const hasFood = items.some((i) => !NOT_FOOD_CATEGORY_RE.test(i.categoryName ?? ""));
+  if (hasBeverage && !hasFood) {
+    throw new AppError(400, "Beverages can only be ordered with food. Please add a chaap, momo, roll or any other dish.", "BEVERAGE_NEEDS_FOOD");
+  }
+}
