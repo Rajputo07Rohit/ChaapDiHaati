@@ -1,5 +1,5 @@
 import { ButtonHTMLAttributes, HTMLAttributes, ReactNode, useEffect, useRef, useState } from "react";
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, Package } from "lucide-react";
 
 export function Card({ className = "", children, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
@@ -252,6 +252,21 @@ export function OrderTypeBadge({ type, prefix }: { type: string; prefix?: string
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${style.badge}`}>
       {prefix}
       {style.label}
+    </span>
+  );
+}
+
+/** Shown on orders where the customer paid for packing, so staff pack the plates. Renders nothing otherwise. */
+export function PackingBadge({ order, size = "sm" }: { order: { packing_fee_paise?: number }; size?: "sm" | "lg" }) {
+  if (!order.packing_fee_paise) return null;
+  return (
+    <span
+      title={`Packing added (₹${order.packing_fee_paise / 100})`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-violet-100 text-violet-700 ${
+        size === "lg" ? "px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide" : "px-2 py-0.5 text-xs font-medium"
+      }`}
+    >
+      <Package size={size === "lg" ? 14 : 12} /> Packing
     </span>
   );
 }

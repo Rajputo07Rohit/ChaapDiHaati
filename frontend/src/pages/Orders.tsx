@@ -7,7 +7,7 @@ import { api, ApiError } from "../api/client";
 import { OrderStatus, PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
-import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
+import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PackingBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
 import { customerNoteOf } from "../components/PaymentModeBanner";
 import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
@@ -474,7 +474,12 @@ export function Orders() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-slate-500 tabular-nums">{toDdMmYyyy(o.business_date)}</td>
-                  <td className="px-4 py-2.5"><OrderTypeBadge type={o.order_type} /></td>
+                  <td className="px-4 py-2.5">
+                    <span className="flex flex-wrap items-center gap-1">
+                      <OrderTypeBadge type={o.order_type} />
+                      <PackingBadge order={o} />
+                    </span>
+                  </td>
                   <td className="px-4 py-2.5">
                     <OrderStatusBadge status={effectiveOrderStatus(o)} />
                   </td>
@@ -736,6 +741,12 @@ export function Orders() {
                 <div className="flex justify-between text-rose-600">
                   <span>Order discount ({detail.order.discount_type === "PERCENTAGE" ? `${detail.order.discount_value}%` : "flat"})</span>
                   <span className="tabular-nums">-{formatPaise(detail.order.discount_paise)}</span>
+                </div>
+              )}
+              {(detail.order.packing_fee_paise ?? 0) > 0 && (
+                <div className="flex justify-between text-violet-700">
+                  <span>Packing</span>
+                  <span className="tabular-nums">+{formatPaise(detail.order.packing_fee_paise)}</span>
                 </div>
               )}
               <div className="flex justify-between font-semibold">

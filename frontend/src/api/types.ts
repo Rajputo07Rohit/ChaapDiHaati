@@ -146,6 +146,8 @@ export interface SalesOrder {
   discount_value: number;
   item_discount_total_paise: number;
   discount_reason: string | null;
+  /** Customer kept "Packing" on (takeaway/delivery web orders): ₹5 per half, ₹9 per full plate. 0 = no packing charged. */
+  packing_fee_paise?: number;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;

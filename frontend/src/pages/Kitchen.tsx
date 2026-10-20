@@ -5,7 +5,7 @@ import { ChefHat, Clock, CheckCircle2, Calendar, MapPin, UtensilsCrossed, Bike, 
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
-import { ORDER_TYPE_STYLE, PageHeader } from "../components/ui/Primitives";
+import { ORDER_TYPE_STYLE, PackingBadge, PageHeader } from "../components/ui/Primitives";
 import { toDdMmYyyy } from "../utils/date";
 import { SoldOutButton } from "../components/SoldOutPanel";
 
@@ -70,12 +70,15 @@ function OrderTicket({ order }: { order: SalesOrder }) {
     >
       <div className={`flex items-center justify-between gap-2 px-4 py-3 ${ready ? "bg-emerald-50" : urgent ? "bg-rose-50" : "bg-slate-50"}`}>
         <span className="text-2xl font-black leading-none tracking-tight text-slate-900">#{order.order_number}</span>
-        <span
-          className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide ${
-            ORDER_TYPE_STYLE[order.order_type]?.badge ?? "bg-slate-200 text-slate-700"
-          }`}
-        >
-          {ORDER_TYPE_STYLE[order.order_type]?.label ?? order.order_type}
+        <span className="flex flex-wrap items-center justify-end gap-1.5">
+          <PackingBadge order={order} size="lg" />
+          <span
+            className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide ${
+              ORDER_TYPE_STYLE[order.order_type]?.badge ?? "bg-slate-200 text-slate-700"
+            }`}
+          >
+            {ORDER_TYPE_STYLE[order.order_type]?.label ?? order.order_type}
+          </span>
         </span>
       </div>
 

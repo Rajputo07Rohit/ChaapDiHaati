@@ -5,7 +5,7 @@ import { Clock, Globe, MapPin, Phone, User } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { SalesOrder } from "../api/types";
 import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
-import { Button, Input, OrderTypeBadge, PageHeader } from "../components/ui/Primitives";
+import { Button, Input, OrderTypeBadge, PackingBadge, PageHeader } from "../components/ui/Primitives";
 import { PENDING_WEB_ORDERS_KEY, usePendingWebOrders } from "../components/WebOrderNotifier";
 import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
 import { formatPaise } from "../utils/money";
@@ -90,6 +90,7 @@ function WebOrderCard({
           <span className="flex items-center gap-1.5">
             <OrderTypeBadge type={order.order_type} prefix="Web · " />
             <PaymentModeBanner order={order} />
+            <PackingBadge order={order} />
           </span>
           <span className="text-sm font-bold tabular-nums">{formatPaise(order.net_total_paise)}</span>
         </div>
