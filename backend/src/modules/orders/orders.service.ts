@@ -29,6 +29,9 @@ const STATUS_ADVANCE_MAP: Record<string, OrderStatus> = {
   READY: "OUT_FOR_DELIVERY",
 };
 
+/** How long a prepaid (stall dine-in) order waits for the customer to pay at the counter before it is cancelled. */
+export const PREPAYMENT_WINDOW_MINUTES = 15;
+
 export interface OrderRow {
   id: string;
   order_number: number;
@@ -54,6 +57,8 @@ export interface OrderRow {
   discount_reason: string | null;
   delivery_fee_paise: number;
   packing_fee_paise: number;
+  channel: "MAIN" | "STALL";
+  prepayment_required: boolean;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;
@@ -98,6 +103,8 @@ function toOrderRow(doc: OrderDoc): OrderRow {
     discount_reason: doc.discountReason,
     delivery_fee_paise: doc.deliveryFeePaise,
     packing_fee_paise: doc.packingFeePaise ?? 0,
+    channel: doc.channel ?? "MAIN",
+    prepayment_required: doc.prepaymentRequired ?? false,
     net_total_paise: doc.netTotalPaise,
     cancel_reason: doc.cancelReason,
     notes: doc.notes,
@@ -306,6 +313,8 @@ interface ResolvedOrderItem {
   menuItemId: string;
   itemName: string;
   categoryName: string | null;
+  /** Which menu the item belongs to — customer orders can't mix the restaurant and stall menus. */
+  channel: "MAIN" | "STALL";
   priceType: "HALF" | "FULL" | "SINGLE";
   unitPricePaise: number;
   quantity: number;
@@ -368,6 +377,7 @@ export async function resolveOrderItems(items: OrderItemInput[]): Promise<Resolv
         menuItemId: item.menuItemId,
         itemName: menuItem.name,
         categoryName: category?.name ?? null,
+        channel: category?.channel ?? "MAIN",
         priceType: item.priceType,
         unitPricePaise: price,
         quantity: item.quantity,
@@ -529,6 +539,7 @@ export async function createOrder(input: CreateOrderInput, userId: string, role:
           discountValue: orderDiscountValue,
           itemDiscountTotalPaise: itemDiscountTotal,
           discountReason: input.discountReason ?? null,
+          channel: resolvedItems.every((i) => i.channel === "STALL") ? "STALL" : "MAIN",
           netTotalPaise: net,
           notes: input.notes ?? null,
           createdBy: userId,
@@ -743,6 +754,9 @@ export async function acceptOrder(orderId: string, userId: string, prepTimeMinut
   if (order.status !== "PENDING_ACCEPTANCE") {
     throw new ConflictError(`Cannot accept an order that is ${order.status.toLowerCase()}.`);
   }
+  if (order.prepaymentRequired && order.paymentStatus !== "PAID") {
+    throw new ConflictError(`Order #${order.orderNumber} is prepaid — confirm the customer's payment first.`);
+  }
 
   order.status = "CONFIRMED";
   order.confirmedAt = nowIso();
@@ -774,17 +788,85 @@ export async function acceptOrder(orderId: string, userId: string, prepTimeMinut
 }
 
 /**
+ * Confirms that the customer paid for a prepaid (stall dine-in) order at the
+ * counter, and sends it to the kitchen — one transaction, so an order is
+ * never left paid-but-not-accepted or accepted-but-unpaid. The payment goes
+ * through postPayments, the same cash/bank ledger posting as any other sale.
+ */
+export async function confirmPrepayment(
+  orderId: string,
+  payments: PaymentInput[],
+  userId: string,
+  prepTimeMinutes?: number
+): Promise<OrderRow> {
+  const order = await Order.findById(orderId);
+  if (!order) throw new NotFoundError("Order");
+  if (!order.prepaymentRequired) throw new ConflictError("This order isn't a prepaid order — accept it normally.");
+  if (order.status !== "PENDING_ACCEPTANCE") {
+    throw new ConflictError(`Order #${order.orderNumber} is already ${order.status.toLowerCase().replace(/_/g, " ")}.`);
+  }
+  if (!payments || payments.length === 0) throw new ValidationError("Choose how the customer paid.");
+
+  const alreadyPaid = order.payments.filter((p) => p.status === "ACTIVE").reduce((s, p) => s + p.amountPaise, 0);
+  const incoming = payments.reduce((s, p) => s + p.amountPaise, 0);
+  if (alreadyPaid + incoming !== order.netTotalPaise) {
+    throw new ValidationError(`Prepaid orders must be paid in full: ${formatPaise(order.netTotalPaise - alreadyPaid)} is due.`);
+  }
+
+  const now = nowIso();
+  await withTransaction(async (session) => {
+    const doc = (await Order.findById(orderId).session(session))!;
+    // Re-checked inside the transaction: two staff tapping "Confirm payment" at once must not post the payment twice.
+    if (doc.status !== "PENDING_ACCEPTANCE") throw new ConflictError(`Order #${doc.orderNumber} was just confirmed by someone else.`);
+    await postPayments(doc, payments, userId, session);
+    doc.paymentStatus = "PAID";
+    doc.status = "CONFIRMED";
+    doc.confirmedAt = now;
+    if (prepTimeMinutes) doc.prepTimeMinutes = prepTimeMinutes;
+    doc.updatedAt = now;
+    await doc.save({ session });
+
+    await recordAudit(
+      {
+        userId,
+        action: "PREPAYMENT_CONFIRMED",
+        entityType: "sales_order",
+        entityId: orderId,
+        oldValue: { status: "PENDING_ACCEPTANCE", paymentStatus: order.paymentStatus },
+        newValue: { status: "CONFIRMED", paymentStatus: "PAID", amountPaise: incoming },
+      },
+      session
+    );
+  });
+
+  notifyOrderEvent(orderId, "ACCEPTED");
+  return getOrderOrThrow(orderId);
+}
+
+/**
  * Auto-cancels customer self-orders that staff never accepted or denied
  * within `maxAgeMinutes`, so a customer is never left waiting indefinitely.
+ * Prepaid (stall dine-in) orders get `prepaymentMaxAgeMinutes` instead — the
+ * customer has to walk up to the counter and pay first.
  * Reuses cancelOrder (so any collected payment is reversed in the ledger).
  */
-export async function expireStalePendingOrders(maxAgeMinutes: number): Promise<number> {
+export async function expireStalePendingOrders(maxAgeMinutes: number, prepaymentMaxAgeMinutes = PREPAYMENT_WINDOW_MINUTES): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
-  const stale = await Order.find({ status: "PENDING_ACCEPTANCE", createdAt: { $lt: cutoff } });
+  const prepaidCutoff = new Date(Date.now() - prepaymentMaxAgeMinutes * 60_000).toISOString();
+  const stale = await Order.find({
+    status: "PENDING_ACCEPTANCE",
+    $or: [
+      { prepaymentRequired: { $ne: true }, createdAt: { $lt: cutoff } },
+      { prepaymentRequired: true, createdAt: { $lt: prepaidCutoff } },
+    ],
+  });
   let expired = 0;
   for (const o of stale) {
+    const reason = o.prepaymentRequired
+      ? "Payment wasn't received in time, so the order was cancelled. Please order again and pay at the counter."
+      : "Restaurant did not respond in time. Please try again.";
     try {
-      await cancelOrder(o._id, "Restaurant did not respond in time. Please try again.", null as unknown as string, "ADMIN");
+      await cancelOrder(o._id, reason, null as unknown as string, "ADMIN");
       expired++;
     } catch (err) {
       console.error(`Failed to auto-cancel stale order ${o._id}:`, err);

@@ -174,6 +174,21 @@ ordersRouter.post(
 
 const paymentsSchema = z.object({ payments: z.array(paymentLineSchema).min(1) });
 
+// Prepaid stall dine-in: staff confirm the customer paid at the counter, which records
+// the payment and sends the order to the kitchen in one step. Any staff role can do it.
+ordersRouter.post(
+  "/:id/confirm-payment",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (req, res) => {
+    const input = paymentsSchema
+      .extend({ prepTimeMinutes: z.number().int().min(1).max(240).optional() })
+      .parse(req.body);
+    const order = await ordersService.confirmPrepayment(req.params.id, input.payments, req.user!.id, input.prepTimeMinutes);
+    res.json({ order });
+  })
+);
+
 // Records payment WITHOUT finishing the order — the COD/rider-collection
 // step, or staff logging a phone payment ahead of dispatch. Riders may only
 // use this on an order assigned to them (enforced in the service).

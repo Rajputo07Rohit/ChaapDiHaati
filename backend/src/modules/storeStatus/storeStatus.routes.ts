@@ -51,12 +51,34 @@ storeStatusAdminRouter.put(
   })
 );
 
+const stallSchema = z.object({ dineIn: z.boolean(), delivery: z.boolean() });
+
+/** Admin-only: switch stall dine-in / stall delivery on or off for the customer app. */
+storeStatusAdminRouter.get(
+  "/stall",
+  requireAuth,
+  isAnyRole,
+  asyncHandler(async (_req, res) => {
+    res.json(await storeStatusService.getStallMode());
+  })
+);
+
+storeStatusAdminRouter.put(
+  "/stall",
+  requireAuth,
+  isAdmin,
+  asyncHandler(async (req, res) => {
+    await storeStatusService.saveStallMode(stallSchema.parse(req.body), req.user!.id);
+    res.json(await storeStatusService.getStallMode());
+  })
+);
+
 export const storeStatusPublicRouter = Router();
 
 storeStatusPublicRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
-    const s = await storeStatusService.getStoreStatus();
+    const [s, stall] = await Promise.all([storeStatusService.getStoreStatus(), storeStatusService.getStallMode()]);
     res.json({
       isOpen: s.isOpen,
       message: s.message,
@@ -67,6 +89,7 @@ storeStatusPublicRouter.get(
       changesInSeconds: s.changesInSeconds,
       nextChangeTime: s.nextChangeTime,
       weekSummary: s.weekSummary,
+      stall,
     });
   })
 );

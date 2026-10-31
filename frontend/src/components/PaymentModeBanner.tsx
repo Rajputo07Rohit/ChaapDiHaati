@@ -1,4 +1,4 @@
-import { Banknote, CheckCircle2, Store } from "lucide-react";
+import { Banknote, CheckCircle2, Store, Wallet } from "lucide-react";
 import { SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 
@@ -39,6 +39,14 @@ export function PaymentModeBanner({ order, large = false, className = "" }: { or
     return (
       <span className={`${base} bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300`}>
         <CheckCircle2 size={icon} /> Paid
+      </span>
+    );
+  }
+
+  if (order.prepayment_required) {
+    return (
+      <span className={`${base} bg-amber-100 text-amber-800 ring-1 ring-amber-300`}>
+        <Wallet size={icon} /> Awaiting payment {formatPaise(remaining)}
       </span>
     );
   }

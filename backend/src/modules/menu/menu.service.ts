@@ -127,6 +127,7 @@ export async function listMenu() {
     name: cat.name,
     sort_order: cat.sortOrder,
     active: cat.active,
+    channel: cat.channel ?? "MAIN",
     items: rows.filter((r) => r.category_id === cat._id),
   }));
 }

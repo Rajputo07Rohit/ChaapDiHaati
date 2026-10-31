@@ -11,7 +11,7 @@ import { CheckoutInput, CreateCustomerOrderInput } from "./customerOrders.types"
 import { ForbiddenError } from "../../utils/errors";
 import { validatePromoCodeForOrder } from "../promoCodes/promoCodes.service";
 import { PromoCode } from "../../db/models";
-import { assertBeveragesHaveFood, assertRumaliHasMain, assertStoreOpen } from "../storeStatus/storeStatus.service";
+import { assertBeveragesHaveFood, assertRumaliHasMain, assertStallRules, assertStoreOpen, getStallMode } from "../storeStatus/storeStatus.service";
 import {
   createCashfreeOrder,
   createCashfreeRefund,
@@ -55,6 +55,7 @@ async function assertOrderingOpenToday() {
 /** Server-side price of a cart: items + promo + delivery fee + packing fee. Never taken from the client. */
 async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "promoCode" | "packing">, phone: string): Promise<number> {
   const resolvedItems = await resolveOrderItems(input.items);
+  assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
@@ -333,6 +334,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
   const isCodDelivery = input.orderType === "DELIVERY" && input.paymentProvider === "COD";
 
   const resolvedItems = await resolveOrderItems(input.items);
+  const channel = assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
@@ -392,6 +394,9 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
           itemDiscountTotalPaise: itemDiscountTotal,
           deliveryFeePaise,
           packingFeePaise,
+          channel,
+          // Stall dine-in is pay-first: staff confirm the payment at the counter before it goes to the kitchen.
+          prepaymentRequired: channel === "STALL" && input.orderType === "DINE_IN",
           netTotalPaise: totalPaise,
           notes: isMockPaidDelivery
             ? `[TEST PAYMENT — not real money]${input.notes ? ` ${input.notes}` : ""}`
@@ -450,7 +455,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
         action: "CUSTOMER_ORDER_CREATED",
         entityType: "sales_order",
         entityId: newOrderId,
-        newValue: { orderNumber, subtotal, net, packingFeePaise, itemCount: resolvedItems.length, phone, orderType: input.orderType, promoCode: promo?.code ?? null },
+        newValue: { orderNumber, subtotal, net, packingFeePaise, channel, itemCount: resolvedItems.length, phone, orderType: input.orderType, promoCode: promo?.code ?? null },
       },
       session
     );

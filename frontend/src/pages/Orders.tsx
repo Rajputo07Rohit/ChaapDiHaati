@@ -7,7 +7,7 @@ import { api, ApiError } from "../api/client";
 import { OrderStatus, PaymentMethod, SalesOrder } from "../api/types";
 import { formatPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
-import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PackingBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
+import { Button, Card, EmptyState, Input, KitchenStatusBadge, effectiveOrderStatus, Modal, ORDER_TYPE_STYLE, OrderStatusBadge, OrderTypeBadge, PackingBadge, StallBadge, PageHeader, PaymentStatusBadge, Select } from "../components/ui/Primitives";
 import { ShareBillModal } from "../components/ShareBillModal";
 import { customerNoteOf } from "../components/PaymentModeBanner";
 import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
@@ -478,6 +478,7 @@ export function Orders() {
                     <span className="flex flex-wrap items-center gap-1">
                       <OrderTypeBadge type={o.order_type} />
                       <PackingBadge order={o} />
+                      <StallBadge order={o} />
                     </span>
                   </td>
                   <td className="px-4 py-2.5">
@@ -497,15 +498,17 @@ export function Orders() {
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatPaise(o.net_total_paise)}</td>
                   <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
                     {canManage && o.status === "PENDING_ACCEPTANCE" && (
+                      // Prepaid (stall dine-in) orders are accepted by confirming their payment on Web Orders.
                       <Button
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          acceptMutation.mutate(o.id);
+                          if (o.prepayment_required) navigate("/web-orders");
+                          else acceptMutation.mutate(o.id);
                         }}
                         disabled={acceptMutation.isPending}
                       >
-                        Accept
+                        {o.prepayment_required ? "Confirm payment" : "Accept"}
                       </Button>
                     )}
                     {canManage && o.order_type !== "DELIVERY" && ["CONFIRMED", "PREPARING", "READY"].includes(o.status) && (
@@ -595,9 +598,15 @@ export function Orders() {
                 )}
                 {canManage && detail.order.status === "PENDING_ACCEPTANCE" && (
                   <>
-                    <Button size="sm" onClick={() => acceptMutation.mutate(detail.order.id)} disabled={acceptMutation.isPending}>
-                      Accept Order
-                    </Button>
+                    {detail.order.prepayment_required ? (
+                      <Button size="sm" onClick={() => navigate("/web-orders")}>
+                        Confirm payment
+                      </Button>
+                    ) : (
+                      <Button size="sm" onClick={() => acceptMutation.mutate(detail.order.id)} disabled={acceptMutation.isPending}>
+                        Accept Order
+                      </Button>
+                    )}
                     <Button size="sm" variant="danger" onClick={() => setCancelTarget(detail.order)}>
                       Deny
                     </Button>

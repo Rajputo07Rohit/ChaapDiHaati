@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { Clock, Globe, MapPin, Phone, User } from "lucide-react";
+import { Banknote, CheckCircle2, Clock, Globe, MapPin, Phone, Smartphone, User, Wallet } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import { SalesOrder } from "../api/types";
+import { PaymentMethod, SalesOrder } from "../api/types";
 import { PaymentModeBanner, customerNoteOf } from "../components/PaymentModeBanner";
-import { Button, Input, OrderTypeBadge, PackingBadge, PageHeader } from "../components/ui/Primitives";
+import { Button, Input, OrderTypeBadge, PackingBadge, StallBadge, PageHeader } from "../components/ui/Primitives";
 import { PENDING_WEB_ORDERS_KEY, usePendingWebOrders } from "../components/WebOrderNotifier";
 import { CancelNotifyModal, CancelNotice } from "../components/CancelNotifyModal";
 import { formatPaise } from "../utils/money";
 
 const PREP_OPTIONS = [15, 25, 40, 60];
+/** Prepaid stall orders wait up to 15 min for the customer to pay; flag them as urgent near the end of that window. */
+const PREPAID_URGENT_MINUTES = 10;
+
+/** A prepaid order that still needs its payment confirmed before it can go to the kitchen. */
+const awaitingPayment = (o: SalesOrder) => !!o.prepayment_required && o.payment_status !== "PAID";
 const DEFAULT_PREP = 25;
 
 function useNow(intervalMs = 1000) {
@@ -33,7 +38,9 @@ function WebOrderCard({
   onPrepChange,
   now,
   onDenied,
+  paymentMethods,
 }: {
+  paymentMethods: PaymentMethod[];
   order: SalesOrder;
   prepMinutes: number;
   onPrepChange: (minutes: number) => void;
@@ -44,7 +51,11 @@ function WebOrderCard({
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState("Denied by restaurant");
   const waitingMins = Math.floor((now - new Date(order.created_at).getTime()) / 60000);
-  const urgent = waitingMins >= 3;
+  const prepaid = awaitingPayment(order);
+  const urgent = waitingMins >= (prepaid ? PREPAID_URGENT_MINUTES : 3);
+  const [methodId, setMethodId] = useState<string | null>(null);
+  const selectedMethodId = methodId ?? paymentMethods[0]?.id ?? "";
+  const selectedMethod = paymentMethods.find((m) => m.id === selectedMethodId);
   const items = (order.items ?? []).filter((i) => i.status === "ACTIVE");
 
   const done = (msg: string) => {
@@ -59,6 +70,15 @@ function WebOrderCard({
     onSuccess: () => done(`Order #${order.order_number} accepted`),
     onError: fail("Could not accept order"),
   });
+  const confirmPayment = useMutation({
+    mutationFn: () =>
+      api.post(`/orders/${order.id}/confirm-payment`, {
+        payments: [{ paymentMethodId: selectedMethodId, amountPaise: order.net_total_paise }],
+        prepTimeMinutes: prepMinutes,
+      }),
+    onSuccess: () => done(`Payment confirmed — order #${order.order_number} sent to the kitchen`),
+    onError: fail("Could not confirm payment"),
+  });
   const deny = useMutation({
     mutationFn: () => api.post(`/orders/${order.id}/cancel`, { reason }),
     onSuccess: () => {
@@ -68,7 +88,7 @@ function WebOrderCard({
     },
     onError: fail("Could not deny order"),
   });
-  const busy = accept.isPending || deny.isPending;
+  const busy = accept.isPending || deny.isPending || confirmPayment.isPending;
 
   return (
     <div
@@ -85,12 +105,20 @@ function WebOrderCard({
         </span>
       </div>
 
+      {prepaid && (
+        <div className="flex items-center gap-2 bg-amber-400 px-4 py-2 text-sm font-bold text-amber-950">
+          <Wallet size={16} className="shrink-0" />
+          Prepaid · collect {formatPaise(order.net_total_paise)} before cooking
+        </div>
+      )}
+
       <div className="px-4 py-2 border-b border-slate-100 space-y-1.5">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5">
             <OrderTypeBadge type={order.order_type} prefix="Web · " />
             <PaymentModeBanner order={order} />
             <PackingBadge order={order} />
+            <StallBadge order={order} />
           </span>
           <span className="text-sm font-bold tabular-nums">{formatPaise(order.net_total_paise)}</span>
         </div>
@@ -153,14 +181,48 @@ function WebOrderCard({
                 </button>
               ))}
             </div>
+            {prepaid && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs font-semibold text-slate-500">Paid by:</span>
+                {paymentMethods.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setMethodId(m.id)}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold transition ${
+                      selectedMethodId === m.id ? "bg-emerald-600 text-white border-emerald-600" : "border-slate-300 text-slate-700 hover:border-slate-400"
+                    }`}
+                  >
+                    {m.type === "CASH" ? <Banknote size={12} /> : <Smartphone size={12} />}
+                    {m.name}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex gap-2">
-              <Button className="flex-1" disabled={busy} onClick={() => accept.mutate()}>
-                {accept.isPending ? "Accepting…" : "Accept → Kitchen"}
-              </Button>
+              {prepaid ? (
+                <Button
+                  className="flex-[2] !bg-emerald-600 hover:!bg-emerald-700"
+                  disabled={busy || !selectedMethodId}
+                  onClick={() => confirmPayment.mutate()}
+                  title={`Records ${formatPaise(order.net_total_paise)} via ${selectedMethod?.name ?? "the selected method"} and sends the order to the kitchen`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <CheckCircle2 size={16} />
+                    {confirmPayment.isPending ? "Confirming…" : `${formatPaise(order.net_total_paise)} received → Kitchen`}
+                  </span>
+                </Button>
+              ) : (
+                <Button className="flex-1" disabled={busy} onClick={() => accept.mutate()}>
+                  {accept.isPending ? "Accepting…" : "Accept → Kitchen"}
+                </Button>
+              )}
               <Button variant="danger" className="flex-1" disabled={busy} onClick={() => setDenying(true)}>
                 Deny
               </Button>
             </div>
+            {prepaid && <p className="text-[11px] text-slate-500">Only tap after the customer has paid. Unpaid orders cancel themselves after 15 min.</p>}
           </>
         ) : (
           <>
@@ -189,10 +251,19 @@ export function WebOrders() {
   const { data, isLoading } = usePendingWebOrders();
   const orders = [...(data?.orders ?? [])].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
+  const { data: methodsData } = useQuery({
+    queryKey: ["payment-methods"],
+    queryFn: () => api.get<{ methods: PaymentMethod[] }>("/payment-methods"),
+    staleTime: 5 * 60_000,
+  });
+  const paymentMethods = (methodsData?.methods ?? []).filter((m) => m.active);
+  // Prepaid orders waiting for payment can't be bulk-accepted — each needs its payment confirmed.
+  const acceptable = orders.filter((o) => !awaitingPayment(o));
+
   const [denyNotice, setDenyNotice] = useState<CancelNotice | null>(null);
   const acceptAll = useMutation({
     mutationFn: async () => {
-      const results = await Promise.allSettled(orders.map((o) => api.post(`/orders/${o.id}/accept`, { prepTimeMinutes: prepFor(o.id) })));
+      const results = await Promise.allSettled(acceptable.map((o) => api.post(`/orders/${o.id}/accept`, { prepTimeMinutes: prepFor(o.id) })));
       return results.filter((r) => r.status === "fulfilled").length;
     },
     onSuccess: (n) => {
@@ -209,9 +280,9 @@ export function WebOrders() {
         description="Orders placed by customers online. Accept to send to the kitchen, or deny. Oldest first."
         actions={
           <div className="flex items-center gap-2 flex-wrap">
-            {orders.length > 1 && (
+            {acceptable.length > 1 && (
               <Button disabled={acceptAll.isPending} onClick={() => acceptAll.mutate()}>
-                {acceptAll.isPending ? "Accepting…" : `Accept all ${orders.length}`}
+                {acceptAll.isPending ? "Accepting…" : `Accept all ${acceptable.length}`}
               </Button>
             )}
           </div>
@@ -233,6 +304,7 @@ export function WebOrders() {
             onPrepChange={(m) => setPrepById((prev) => ({ ...prev, [o.id]: m }))}
             now={now}
             onDenied={setDenyNotice}
+            paymentMethods={paymentMethods}
           />
         ))}
       </div>

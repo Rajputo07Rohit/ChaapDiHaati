@@ -113,6 +113,10 @@ export interface OrderDoc {
   deliveryFeePaise: number;
   /** Only ever non-zero for customer self-ordered takeaway/delivery where the customer kept packing on (₹5/half, ₹9/full plate). */
   packingFeePaise: number;
+  /** "STALL" for customer orders placed from the street-stall menu; MAIN (the default) for everything else. */
+  channel: "MAIN" | "STALL";
+  /** Stall dine-in is prepaid: the order waits in PENDING_ACCEPTANCE until staff confirm the customer paid (confirmPrepayment), and only then goes to the kitchen. */
+  prepaymentRequired: boolean;
   netTotalPaise: number;
   cancelReason: string | null;
   notes: string | null;
@@ -220,6 +224,8 @@ const orderSchema = new Schema<OrderDoc>({
   itemDiscountTotalPaise: { type: Number, required: true, default: 0 },
   deliveryFeePaise: { type: Number, required: true, default: 0 },
   packingFeePaise: { type: Number, required: true, default: 0 },
+  channel: { type: String, required: true, enum: ["MAIN", "STALL"], default: "MAIN" },
+  prepaymentRequired: { type: Boolean, required: true, default: false },
   discountReason: { type: String, default: null },
   promoCode: { type: String, default: null },
   netTotalPaise: { type: Number, required: true, default: 0 },

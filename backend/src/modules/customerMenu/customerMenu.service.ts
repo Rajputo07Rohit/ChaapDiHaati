@@ -14,5 +14,8 @@ const INTERNAL_CATEGORY_NAMES = new Set(["Packaging"]);
  */
 export async function listPublicMenu() {
   const categories = await listMenu();
-  return categories.filter((cat) => !INTERNAL_CATEGORY_NAMES.has(cat.name));
+  return categories
+    .filter((cat) => !INTERNAL_CATEGORY_NAMES.has(cat.name))
+    // Stall categories are named "Stall · Soya Tandoori" (names are unique across both menus); customers only ever see one menu at a time, so drop the prefix.
+    .map((cat) => (cat.channel === "STALL" ? { ...cat, name: cat.name.replace(/^Stall\s*·\s*/, "") } : cat));
 }

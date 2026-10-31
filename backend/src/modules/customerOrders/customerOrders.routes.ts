@@ -3,7 +3,7 @@ import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { requireCustomerAuth } from "../../middleware/customerAuth";
 import * as customerOrdersService from "./customerOrders.service";
-import { OrderRow } from "../orders/orders.service";
+import { OrderRow, PREPAYMENT_WINDOW_MINUTES } from "../orders/orders.service";
 import { isCashfreeConfigured } from "../payments/cashfree.service";
 import { env } from "../../config/env";
 
@@ -20,6 +20,13 @@ function toCustomerOrderResponse(order: OrderRow) {
     id: order.id,
     order_number: order.order_number,
     order_type: order.order_type,
+    channel: order.channel,
+    prepayment_required: order.prepayment_required,
+    // Deadline to pay at the counter; the order is cancelled automatically after it.
+    pay_by:
+      order.prepayment_required && order.status === "PENDING_ACCEPTANCE"
+        ? new Date(new Date(order.created_at).getTime() + PREPAYMENT_WINDOW_MINUTES * 60_000).toISOString()
+        : null,
     // A delivery order is handed to a rider as soon as it reaches the kitchen, but the
     // customer should see "preparing" until the kitchen actually marks it ready.
     status: order.status === "OUT_FOR_DELIVERY" && order.kitchen_status === "PENDING" ? "PREPARING" : order.status,

@@ -148,6 +148,10 @@ export interface SalesOrder {
   discount_reason: string | null;
   /** Customer kept "Packing" on (takeaway/delivery web orders): ₹5 per half, ₹9 per full plate. 0 = no packing charged. */
   packing_fee_paise?: number;
+  /** "STALL" = placed from the street-stall menu. */
+  channel?: "MAIN" | "STALL";
+  /** Stall dine-in: the customer pays at the counter first; staff confirm it (Web Orders) before it goes to the kitchen. */
+  prepayment_required?: boolean;
   net_total_paise: number;
   cancel_reason: string | null;
   notes: string | null;

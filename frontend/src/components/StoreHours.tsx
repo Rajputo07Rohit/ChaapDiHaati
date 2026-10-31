@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { Clock, Power, Store } from "lucide-react";
+import { Bike, Clock, Power, Store, UtensilsCrossed } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { Button, Card, Input } from "./ui/Primitives";
 
@@ -231,6 +231,85 @@ export function StoreHoursSection() {
             {save.isPending ? "Saving…" : "Save changes"}
           </Button>
           {dirty && <span className="text-xs text-amber-600">Unsaved changes</span>}
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+interface StallMode {
+  dineIn: boolean;
+  delivery: boolean;
+}
+
+const STALL_OPTIONS: { key: keyof StallMode; title: string; hint: string; icon: typeof Store }[] = [
+  { key: "dineIn", title: "Stall Dine-in", hint: "Customers order from the stall menu and eat at the stall.", icon: UtensilsCrossed },
+  { key: "delivery", title: "Stall Delivery", hint: "Customers get the stall menu delivered.", icon: Bike },
+];
+
+/**
+ * While either switch is on, the customer app shows only the stall menu (the
+ * "Stall · …" categories) and only the stall order types switched on here —
+ * the restaurant menu, takeaway, and anything not enabled are hidden.
+ */
+export function StallOrderingSection() {
+  const queryClient = useQueryClient();
+  const { data } = useQuery({ queryKey: ["stall-mode"], queryFn: () => api.get<StallMode>("/store-hours/stall") });
+  const save = useMutation({
+    mutationFn: (v: StallMode) => api.put<StallMode>("/store-hours/stall", v),
+    onSuccess: (v) => {
+      queryClient.setQueryData(["stall-mode"], v);
+      toast.success(v.dineIn || v.delivery ? "Stall ordering is live on the customer app" : "Customer app is back on the restaurant menu");
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : "Could not save"),
+  });
+  const active = !!data && (data.dineIn || data.delivery);
+  const { data: store } = useStoreStatus();
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Stall Ordering</h2>
+      <Card className="p-4 max-w-2xl space-y-4">
+        <div
+          className={`flex items-center gap-3 rounded-xl p-3 ${
+            active ? "bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300" : "bg-slate-50 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+          }`}
+        >
+          <Store size={22} />
+          <div className="text-sm">
+            <div className="font-semibold">{!data ? "Loading…" : active ? "Customer app is showing the stall menu" : "Customer app is showing the restaurant menu"}</div>
+            <div className="text-xs opacity-80">Turn on stall dine-in and/or delivery to switch the customer app to the stall menu.</div>
+          </div>
+        </div>
+        {active && store && !store.isOpen && (
+          <div className="rounded-xl bg-rose-50 p-3 text-sm text-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+            <span className="font-semibold">Store is closed, so the stall is closed too.</span> Customers see the stall menu but can't order until you open the store.
+          </div>
+        )}
+        <div className="grid gap-2 sm:grid-cols-2">
+          {STALL_OPTIONS.map(({ key, title, hint, icon: Icon }) => {
+            const on = !!data?.[key];
+            return (
+              <button
+                key={key}
+                type="button"
+                disabled={!data || save.isPending}
+                onClick={() => data && save.mutate({ ...data, [key]: !on })}
+                className={`flex items-start gap-3 rounded-xl border p-3 text-left transition disabled:opacity-60 ${
+                  on ? "border-amber-500 bg-amber-50 ring-1 ring-amber-500 dark:bg-amber-900/20" : "border-slate-200 hover:border-slate-300 dark:border-slate-700"
+                }`}
+              >
+                <Icon size={18} className="mt-0.5 shrink-0" />
+                <span className="flex-1">
+                  <span className="block text-sm font-semibold">{title}</span>
+                  <span className="block text-xs text-slate-500">{hint}</span>
+                </span>
+                <span className={`relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition ${on ? "bg-amber-500" : "bg-slate-300 dark:bg-slate-600"}`}>
+                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
+                </span>
+              </button>
+            );
+          })}
         </div>
       </Card>
     </section>

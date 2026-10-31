@@ -1,10 +1,14 @@
 import { Schema, model } from "mongoose";
 
+/** MAIN = the restaurant menu; STALL = the street-stall menu, shown to customers only while stall ordering is switched on (see stall.service). */
+export type MenuChannel = "MAIN" | "STALL";
+
 export interface MenuCategoryDoc {
   _id: string;
   name: string;
   sortOrder: number;
   active: boolean;
+  channel: MenuChannel;
 }
 
 const categorySchema = new Schema<MenuCategoryDoc>({
@@ -12,6 +16,7 @@ const categorySchema = new Schema<MenuCategoryDoc>({
   name: { type: String, required: true, unique: true },
   sortOrder: { type: Number, required: true, default: 0 },
   active: { type: Boolean, required: true, default: true },
+  channel: { type: String, required: true, enum: ["MAIN", "STALL"], default: "MAIN" },
 });
 
 export const MenuCategory = model<MenuCategoryDoc>("MenuCategory", categorySchema);

@@ -224,3 +224,49 @@ export function assertBeveragesHaveFood(items: { categoryName: string | null }[]
     throw new AppError(400, "Beverages can only be ordered with food. Please add a chaap, momo, roll or any other dish.", "BEVERAGE_NEEDS_FOOD");
   }
 }
+
+/**
+ * Stall ordering: while either switch is on, the customer app serves the
+ * street-stall menu (categories with channel STALL) instead of the restaurant
+ * menu, and only offers the stall order types that are switched on.
+ */
+export interface StallMode {
+  dineIn: boolean;
+  delivery: boolean;
+}
+
+const STALL_SETTING_KEY = "stall_mode";
+let stallCache: { value: StallMode; at: number } | null = null;
+
+export async function getStallMode(): Promise<StallMode> {
+  if (stallCache && Date.now() - stallCache.at < CACHE_TTL_MS) return stallCache.value;
+  const stored = await getSetting<Partial<StallMode> | null>(STALL_SETTING_KEY, null);
+  const value = { dineIn: stored?.dineIn === true, delivery: stored?.delivery === true };
+  stallCache = { value, at: Date.now() };
+  return value;
+}
+
+export async function saveStallMode(input: StallMode, userId: string): Promise<void> {
+  await setSetting(STALL_SETTING_KEY, input, userId);
+  stallCache = null;
+}
+
+export const isStallActive = (s: StallMode) => s.dineIn || s.delivery;
+
+/** Checks a customer order against the stall switches and returns which menu it was placed from. */
+export function assertStallRules(stall: StallMode, orderType: string, items: { channel: "MAIN" | "STALL" }[]): "MAIN" | "STALL" {
+  const hasStallItem = items.some((i) => i.channel === "STALL");
+  if (!isStallActive(stall)) {
+    if (hasStallItem) throw new AppError(400, "The stall menu isn't available right now. Please order from our main menu.", "STALL_CLOSED");
+    return "MAIN";
+  }
+  if (items.some((i) => i.channel !== "STALL")) {
+    throw new AppError(400, "We're serving from our stall right now. Please order from the stall menu.", "STALL_ONLY");
+  }
+  const allowed = orderType === "DINE_IN" ? stall.dineIn : orderType === "DELIVERY" ? stall.delivery : false;
+  if (!allowed) {
+    const offered = [stall.dineIn && "dine-in", stall.delivery && "delivery"].filter(Boolean).join(" or ");
+    throw new AppError(400, `Stall orders are ${offered} only right now.`, "STALL_ORDER_TYPE");
+  }
+  return "STALL";
+}

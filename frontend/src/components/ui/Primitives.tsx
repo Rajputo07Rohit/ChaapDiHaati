@@ -1,5 +1,5 @@
 import { ButtonHTMLAttributes, HTMLAttributes, ReactNode, useEffect, useRef, useState } from "react";
-import { MoreVertical, Package } from "lucide-react";
+import { MoreVertical, Package, Store } from "lucide-react";
 
 export function Card({ className = "", children, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
@@ -267,6 +267,21 @@ export function PackingBadge({ order, size = "sm" }: { order: { packing_fee_pais
       }`}
     >
       <Package size={size === "lg" ? 14 : 12} /> Packing
+    </span>
+  );
+}
+
+/** Shown on orders placed from the street-stall menu, so staff prepare/serve them at the stall. Renders nothing otherwise. */
+export function StallBadge({ order, size = "sm" }: { order: { channel?: "MAIN" | "STALL" }; size?: "sm" | "lg" }) {
+  if (order.channel !== "STALL") return null;
+  return (
+    <span
+      title="Stall order"
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-100 text-amber-800 ${
+        size === "lg" ? "px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide" : "px-2 py-0.5 text-xs font-medium"
+      }`}
+    >
+      <Store size={size === "lg" ? 14 : 12} /> Stall
     </span>
   );
 }

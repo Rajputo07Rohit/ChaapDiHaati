@@ -127,7 +127,7 @@ async function buildMessage(orderId: string, event: OrderEvent): Promise<{ phone
   let body = "";
   switch (event) {
     case "ACCEPTED":
-      title = `Order ${n} accepted 👍`;
+      title = o.prepaymentRequired ? `Payment received — order ${n} confirmed ✅` : `Order ${n} accepted 👍`;
       body = o.prepTimeMinutes ? `The kitchen is on it — ready in about ${o.prepTimeMinutes} min.` : "The kitchen is on it.";
       break;
     case "READY_FOR_PICKUP":
