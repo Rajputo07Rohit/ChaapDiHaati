@@ -43,6 +43,8 @@ export interface MenuCategory {
   id: string;
   name: string;
   sort_order: number;
+  /** MAIN = restaurant menu, STALL = street-stall menu ("Stall · …" categories). */
+  channel?: "MAIN" | "STALL";
   items: MenuItem[];
 }
 

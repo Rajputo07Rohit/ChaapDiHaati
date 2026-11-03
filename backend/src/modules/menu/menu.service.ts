@@ -118,9 +118,15 @@ export async function listMenu() {
   const categories = await MenuCategory.find({ active: true }).sort({ sortOrder: 1 });
   const items = await MenuItem.find({ status: { $ne: "DISCONTINUED" } }).sort({ sortOrder: 1 });
 
-  const rows = await Promise.all(
-    items.map(async (i) => ({ ...toItemRow(i), prices: await getCurrentPrices(i._id) }))
-  );
+  // One query for every item's current prices (instead of one per item — the menu is loaded on every POS/customer visit).
+  const priceDocs = await MenuPrice.find({ menuItemId: { $in: items.map((i) => i._id) }, effectiveTo: null }).lean();
+  const pricesByItem = new Map<string, CurrentPriceRow[]>();
+  for (const p of priceDocs) {
+    const list = pricesByItem.get(p.menuItemId) ?? [];
+    list.push({ price_type: p.priceType, price_paise: p.pricePaise });
+    pricesByItem.set(p.menuItemId, list);
+  }
+  const rows = items.map((i) => ({ ...toItemRow(i), prices: pricesByItem.get(i._id) ?? [] }));
 
   return categories.map((cat) => ({
     id: cat._id,

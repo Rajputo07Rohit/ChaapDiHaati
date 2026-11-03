@@ -60,9 +60,19 @@ export function POS() {
   const { data: discountData } = useQuery({ queryKey: ["discounts"], queryFn: () => api.get<{ discounts: DiscountRule[] }>("/discounts") });
   const discountRules = discountData?.discounts ?? [];
 
-  const categories = (menuData?.categories ?? []).filter((c) => c.name !== "System" && c.items.length > 0);
+  // Same rule as the customer app: while stall ordering is on, the till rings up the stall menu; otherwise the restaurant menu.
+  const { data: stallMode } = useQuery({
+    queryKey: ["stall-mode"],
+    queryFn: () => api.get<{ dineIn: boolean; delivery: boolean }>("/store-hours/stall"),
+    refetchInterval: 15_000,
+  });
+  const stallActive = !!stallMode && (stallMode.dineIn || stallMode.delivery);
+  const categories = (menuData?.categories ?? [])
+    .filter((c) => c.name !== "System" && c.items.length > 0 && (c.channel ?? "MAIN") === (stallActive ? "STALL" : "MAIN"))
+    .map((c) => (c.channel === "STALL" ? { ...c, name: c.name.replace(/^Stall\s*·\s*/, "") } : c));
   const [activeCat, setActiveCat] = useState<string | null>(null);
-  const catToShow = activeCat ?? categories[0]?.id ?? null;
+  // Falls back to the first tab when the menu switches between restaurant and stall.
+  const catToShow = (activeCat && categories.some((c) => c.id === activeCat) ? activeCat : null) ?? categories[0]?.id ?? null;
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [orderType, setOrderType] = useState<OrderType>(prefill?.prefillOrderType ?? "DINE_IN");
@@ -301,7 +311,10 @@ export function POS() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] xl:grid-cols-[1fr_380px] gap-6 h-full">
       <div className="min-w-0">
-        <PageHeader title="POS / New Order" />
+        <PageHeader
+          title="POS / New Order"
+          description={stallActive ? "Stall menu — stall ordering is on (Settings → Stall Ordering)" : undefined}
+        />
         <div className="flex flex-wrap gap-2 pb-3 mb-4 border-b border-slate-200">
           {categories.map((cat) => (
             <button
