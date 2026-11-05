@@ -67,8 +67,16 @@ export function POS() {
     refetchInterval: 15_000,
   });
   const stallActive = !!stallMode && (stallMode.dineIn || stallMode.delivery);
+  // Rolls aren't on the stall menu, but staff can still ring them up: keep the restaurant's
+  // roll categories on the till in stall mode too (customers still can't order them there).
+  const isRollCategory = (c: MenuCategory) => (c.channel ?? "MAIN") === "MAIN" && /roll/i.test(c.name);
   const categories = (menuData?.categories ?? [])
-    .filter((c) => c.name !== "System" && c.items.length > 0 && (c.channel ?? "MAIN") === (stallActive ? "STALL" : "MAIN"))
+    .filter(
+      (c) =>
+        c.name !== "System" &&
+        c.items.length > 0 &&
+        ((c.channel ?? "MAIN") === (stallActive ? "STALL" : "MAIN") || (stallActive && isRollCategory(c)))
+    )
     .map((c) => (c.channel === "STALL" ? { ...c, name: c.name.replace(/^Stall\s*·\s*/, "") } : c));
   const [activeCat, setActiveCat] = useState<string | null>(null);
   // Falls back to the first tab when the menu switches between restaurant and stall.
