@@ -11,7 +11,7 @@ import { CheckoutInput, CreateCustomerOrderInput } from "./customerOrders.types"
 import { ForbiddenError } from "../../utils/errors";
 import { validatePromoCodeForOrder } from "../promoCodes/promoCodes.service";
 import { PromoCode } from "../../db/models";
-import { assertBeveragesHaveFood, assertRumaliHasMain, assertStallRules, assertStoreOpen, getStallMode } from "../storeStatus/storeStatus.service";
+import { assertBeveragesHaveFood, assertRollsAllowedNow, assertRumaliHasMain, assertStallRules, assertStoreOpen, getStallMode } from "../storeStatus/storeStatus.service";
 import {
   createCashfreeOrder,
   createCashfreeRefund,
@@ -58,6 +58,7 @@ async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "pro
   assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);
+  assertRollsAllowedNow(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   const promo = input.promoCode ? await validatePromoCodeForOrder(input.promoCode, phone, subtotalOnly) : null;
   const { subtotal, net } = computeOrderTotals(resolvedItems, promo?.discountType ?? "FLAT", promo?.discountValue ?? 0);
@@ -337,6 +338,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
   const channel = assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);
+  assertRollsAllowedNow(resolvedItems);
   const subtotalOnly = resolvedItems.reduce((s, i) => s + i.lineSubtotalPaise, 0);
   // Re-validated here even though createCashfreeCheckout already checked it —
   // this is the call that actually commits, so it can never trust a

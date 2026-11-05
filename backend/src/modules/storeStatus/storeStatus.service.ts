@@ -226,6 +226,30 @@ export function assertBeveragesHaveFood(items: { categoryName: string | null }[]
 }
 
 /**
+ * Rolls are not taken through the customer app between 7:30 PM and 9 PM IST
+ * (the kitchen's busiest stretch). Staff can still ring rolls up on the POS.
+ */
+export const ROLL_PAUSE_START = "19:30";
+export const ROLL_PAUSE_END = "21:00";
+const ROLL_CATEGORY_RE = /roll/i;
+
+export function isRollPauseNow(now = new Date()): boolean {
+  const { minute } = istParts(now);
+  return minute >= toMinutes(ROLL_PAUSE_START) && minute < toMinutes(ROLL_PAUSE_END);
+}
+
+export function assertRollsAllowedNow(items: { categoryName: string | null }[], now = new Date()): void {
+  if (!isRollPauseNow(now)) return;
+  if (items.some((i) => ROLL_CATEGORY_RE.test(i.categoryName ?? ""))) {
+    throw new AppError(
+      400,
+      `Rolls aren't available for online orders from ${fmt12(ROLL_PAUSE_START)} to ${fmt12(ROLL_PAUSE_END)}. Please remove them from your cart to continue.`,
+      "ROLLS_PAUSED"
+    );
+  }
+}
+
+/**
  * Stall ordering: while either switch is on, the customer app serves the
  * street-stall menu (categories with channel STALL) instead of the restaurant
  * menu, and only offers the stall order types that are switched on.
