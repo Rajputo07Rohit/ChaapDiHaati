@@ -606,8 +606,16 @@ function deliveryFeeFor(subtotalPaise: number): number {
   return 0;
 }
 
-/** Packing charge per plate: ₹5 per half plate, ₹9 per full plate. Only for takeaway/delivery, only when the customer kept packing on, and never for rolls. */
+/** Packing charge per plate: ₹5 per half plate, ₹9 per full plate, ₹6 per combo. Only for takeaway/delivery, only when the customer kept packing on, and never for rolls. */
 const PACKING_FEE_PAISE = { HALF: 500, FULL: 900, SINGLE: 0 } as const;
+const COMBO_PACKING_FEE_PAISE = 600;
+
+function linePackingFee(categoryName: string | null, priceType: "HALF" | "FULL" | "SINGLE"): number {
+  const cat = categoryName ?? "";
+  if (/roll/i.test(cat)) return 0;
+  if (/combo/i.test(cat)) return COMBO_PACKING_FEE_PAISE;
+  return PACKING_FEE_PAISE[priceType];
+}
 
 function packingFeeFor(
   orderType: string,
@@ -615,5 +623,5 @@ function packingFeeFor(
   items: { priceType: "HALF" | "FULL" | "SINGLE"; quantity: number; categoryName: string | null }[]
 ): number {
   if (orderType === "DINE_IN" || !packing) return 0;
-  return items.reduce((s, i) => s + (/roll/i.test(i.categoryName ?? "") ? 0 : PACKING_FEE_PAISE[i.priceType] * i.quantity), 0);
+  return items.reduce((s, i) => s + linePackingFee(i.categoryName, i.priceType) * i.quantity, 0);
 }
