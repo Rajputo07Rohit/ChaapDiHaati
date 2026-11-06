@@ -54,7 +54,7 @@ async function assertOrderingOpenToday() {
 
 /** Server-side price of a cart: items + promo + delivery fee + packing fee. Never taken from the client. */
 async function priceCart(input: Pick<CheckoutInput, "orderType" | "items" | "promoCode" | "packing">, phone: string): Promise<number> {
-  const resolvedItems = await resolveOrderItems(input.items);
+  const resolvedItems = await resolveOrderItems(input.items, { requireChoice: true });
   assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);
@@ -334,7 +334,7 @@ export async function createCustomerOrder(input: CreateCustomerOrderInput, phone
   const isMockPaidDelivery = input.orderType === "DELIVERY" && input.paymentProvider === "MOCK";
   const isCodDelivery = input.orderType === "DELIVERY" && input.paymentProvider === "COD";
 
-  const resolvedItems = await resolveOrderItems(input.items);
+  const resolvedItems = await resolveOrderItems(input.items, { requireChoice: true });
   const channel = assertStallRules(await getStallMode(), input.orderType, resolvedItems);
   assertRumaliHasMain(resolvedItems);
   assertBeveragesHaveFood(resolvedItems);

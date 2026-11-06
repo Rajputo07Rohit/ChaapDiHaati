@@ -54,6 +54,8 @@ const updateItemSchema = z.object({
   halfLabel: z.string().optional(),
   fullLabel: z.string().optional(),
   imageUrl: z.string().nullable().optional(),
+  addonMode: z.enum(["MULTI", "PICK_ONE"]).optional(),
+  description: z.string().max(200).nullable().optional(),
   halfPricePaise: z.number().int().min(0).optional(),
   fullPricePaise: z.number().int().min(0).optional(),
   singlePricePaise: z.number().int().min(0).optional(),
@@ -91,7 +93,7 @@ menuRouter.patch(
     const input = updateItemSchema.parse(req.body);
     const existing = await menuService.getMenuItemOrThrow(req.params.id);
 
-    if (input.name || input.status || input.halfLabel || input.fullLabel || input.imageUrl !== undefined) {
+    if (input.name || input.status || input.halfLabel || input.fullLabel || input.imageUrl !== undefined || input.addonMode !== undefined || input.description !== undefined) {
       await menuService.updateMenuItemFields(req.params.id, input);
       await recordAudit({
         userId: req.user!.id,

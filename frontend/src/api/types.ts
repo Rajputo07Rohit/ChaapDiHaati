@@ -36,6 +36,10 @@ export interface MenuItem {
   status: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
   prices: MenuPrice[];
   addons: MenuItemAddon[];
+  /** PICK_ONE: the add-ons are a required single choice (e.g. a combo's cold drink). */
+  addon_mode?: "MULTI" | "PICK_ONE";
+  /** Short line under the name, e.g. what a combo includes. */
+  description?: string | null;
   image_url: string | null;
 }
 

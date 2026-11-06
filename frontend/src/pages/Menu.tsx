@@ -325,9 +325,13 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
   const [full, setFull] = useState("");
   const [single, setSingle] = useState("");
   const [status, setStatus] = useState("ACTIVE");
+  const [description, setDescription] = useState("");
+  const [pickOne, setPickOne] = useState(false);
 
   useEffect(() => {
     if (item) {
+      setDescription(item.description ?? "");
+      setPickOne(item.addon_mode === "PICK_ONE");
       setHalf(((item.prices.find((p) => p.price_type === "HALF")?.price_paise ?? 0) / 100).toString());
       setFull(((item.prices.find((p) => p.price_type === "FULL")?.price_paise ?? 0) / 100).toString());
       setSingle(((item.prices.find((p) => p.price_type === "SINGLE")?.price_paise ?? 0) / 100).toString());
@@ -339,6 +343,8 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
     mutationFn: () =>
       api.patch(`/menu/${item!.id}`, {
         status,
+        description: description.trim() || null,
+        addonMode: pickOne ? "PICK_ONE" : "MULTI",
         halfPricePaise: item!.has_half ? rupeesToPaise(parseFloat(half) || 0) : undefined,
         fullPricePaise: item!.has_full ? rupeesToPaise(parseFloat(full) || 0) : undefined,
         singlePricePaise: item!.has_single ? rupeesToPaise(parseFloat(single) || 0) : undefined,
@@ -382,6 +388,17 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
             <option value="DISCONTINUED">Discontinued</option>
           </Select>
         </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500">Description (shown under the name, e.g. what a combo includes)</label>
+          <Input value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="Half Plate Punjabi Chaap + 1 Rumali Roti + 1 Cold Drink" className="w-full" />
+        </div>
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={pickOne} onChange={(e) => setPickOne(e.target.checked)} className="mt-0.5" />
+          <span>
+            Add-ons are a required choice — customer picks exactly one
+            <span className="block text-xs text-slate-400">Use for combos, e.g. the cold drink. Leave off for optional extras like Extra Cream.</span>
+          </span>
+        </label>
         <Button className="w-full" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
           {mutation.isPending ? "Saving…" : "Save"}
         </Button>

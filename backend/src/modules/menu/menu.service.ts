@@ -26,6 +26,8 @@ export interface MenuItemRow {
   status: "ACTIVE" | "UNAVAILABLE" | "DISCONTINUED";
   sort_order: number;
   addons: MenuItemAddonRow[];
+  addon_mode: "MULTI" | "PICK_ONE";
+  description: string | null;
   image_url: string | null;
 }
 
@@ -48,6 +50,8 @@ function toItemRow(doc: MenuItemDoc): MenuItemRow {
     status: doc.status,
     sort_order: doc.sortOrder,
     addons: doc.addons.map((a) => ({ id: a._id, name: a.name, price_paise: a.pricePaise, active: a.active })),
+    addon_mode: doc.addonMode ?? "MULTI",
+    description: doc.description ?? null,
     image_url: doc.imageUrl,
   };
 }
@@ -185,6 +189,8 @@ export async function updateMenuItemFields(
     halfLabel?: string;
     fullLabel?: string;
     imageUrl?: string | null;
+    addonMode?: "MULTI" | "PICK_ONE";
+    description?: string | null;
   }
 ): Promise<void> {
   const doc = await MenuItem.findById(id);
@@ -194,6 +200,8 @@ export async function updateMenuItemFields(
   if (changes.halfLabel !== undefined) doc.halfLabel = changes.halfLabel;
   if (changes.fullLabel !== undefined) doc.fullLabel = changes.fullLabel;
   if (changes.imageUrl !== undefined) doc.imageUrl = changes.imageUrl;
+  if (changes.addonMode !== undefined) doc.addonMode = changes.addonMode;
+  if (changes.description !== undefined) doc.description = changes.description?.trim() || null;
   await doc.save();
 }
 

@@ -34,6 +34,8 @@ export interface MenuItemAddonDoc {
   active: boolean;
 }
 
+export type MenuItemAddonMode = "MULTI" | "PICK_ONE";
+
 export interface MenuItemDoc {
   _id: string;
   categoryId: string;
@@ -47,6 +49,12 @@ export interface MenuItemDoc {
   status: MenuItemStatus;
   sortOrder: number;
   addons: MenuItemAddonDoc[];
+  /** MULTI = add-ons are optional extras (tick any); PICK_ONE = the add-ons are a
+   * required single choice, e.g. a combo's cold drink — the customer must pick
+   * exactly one, and an order line can never carry more than one. */
+  addonMode: MenuItemAddonMode;
+  /** Short line under the name on menu cards, e.g. what a combo includes. */
+  description: string | null;
   /** Dish photo shown on the customer app's menu card. Null until an admin sets one. */
   imageUrl: string | null;
   createdAt: string;
@@ -72,6 +80,8 @@ const itemSchema = new Schema<MenuItemDoc>({
   status: { type: String, required: true, enum: ["ACTIVE", "UNAVAILABLE", "DISCONTINUED"], default: "ACTIVE" },
   sortOrder: { type: Number, required: true, default: 0 },
   addons: { type: [addonSchema], required: true, default: [] },
+  addonMode: { type: String, required: true, enum: ["MULTI", "PICK_ONE"], default: "MULTI" },
+  description: { type: String, default: null },
   imageUrl: { type: String, default: null },
   createdAt: { type: String, required: true },
 });

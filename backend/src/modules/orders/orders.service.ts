@@ -343,7 +343,12 @@ function resolveDiscountAmount(basePaise: number, discountType: DiscountType, di
   return amount;
 }
 
-export async function resolveOrderItems(items: OrderItemInput[]): Promise<ResolvedOrderItem[]> {
+/**
+ * `requireChoice`: customer-app orders must pick exactly one option on a
+ * PICK_ONE item (e.g. a combo's drink). Staff (POS) orders may leave it
+ * blank — the drink is then chosen at the counter — but never pick two.
+ */
+export async function resolveOrderItems(items: OrderItemInput[], opts: { requireChoice?: boolean } = {}): Promise<ResolvedOrderItem[]> {
   return Promise.all(
     items.map(async (item) => {
       const menuItem = await getMenuItemOrThrow(item.menuItemId);
@@ -354,6 +359,12 @@ export async function resolveOrderItems(items: OrderItemInput[]): Promise<Resolv
       const price = await getCurrentPrice(item.menuItemId, item.priceType);
       if (price == null) {
         throw new ValidationError(`${menuItem.name} has no price configured for ${item.priceType}.`);
+      }
+
+      if (menuItem.addon_mode === "PICK_ONE" && menuItem.addons.some((a) => a.active)) {
+        const picked = new Set(item.addonIds ?? []).size;
+        if (picked > 1) throw new ValidationError(`Choose only one option for ${menuItem.name}.`);
+        if (picked === 0 && opts.requireChoice) throw new ValidationError(`Please choose an option for ${menuItem.name}.`);
       }
 
       const addons: ResolvedOrderItemAddon[] = [];

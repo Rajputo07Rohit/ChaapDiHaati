@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Plus, Minus, Trash2, X, Percent, Tag, MessageCircle, CheckCircle2 } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import { DiscountRule, DiscountType, MenuCategory, OrderType, PaymentMethod, PriceType, SalesOrder } from "../api/types";
+import { DiscountRule, DiscountType, MenuCategory, MenuItem, OrderType, PaymentMethod, PriceType, SalesOrder } from "../api/types";
 import { formatPaise, rupeesToPaise } from "../utils/money";
 import { printReceipt } from "../utils/receipt";
 import { Badge, Button, Input, Modal, PageHeader, Select } from "../components/ui/Primitives";
@@ -20,8 +20,10 @@ interface CartLine {
   categoryName: string;
   priceType: PriceType;
   priceLabel: string; // human label for priceType, e.g. "Half" or "5 pc" for momo
-  unitPricePaise: number;
+  unitPricePaise: number; // includes the picked option's price, if any
   quantity: number;
+  /** The option picked on a "pick one" item, e.g. a combo's cold drink. */
+  addon?: { id: string; name: string };
   specialInstructions?: string;
   discountType: DiscountType;
   discountValueInput: string; // FLAT: rupees as typed; PERCENTAGE: raw 0-100 number
@@ -130,18 +132,42 @@ export function POS() {
     categoryName: string,
     priceType: PriceType,
     priceLabel: string,
-    unitPricePaise: number
+    unitPricePaise: number,
+    addon?: { id: string; name: string; pricePaise: number }
   ) {
     setCompletedOrder(null); // tapping an item means a fresh order — drop the previous one's confirmation screen
     setCart((prev) => {
-      const key = `${menuItemId}:${priceType}`;
+      const key = `${menuItemId}:${priceType}:${addon?.id ?? ""}`;
       const existing = prev.find((l) => l.key === key);
       if (existing) return prev.map((l) => (l.key === key ? { ...l, quantity: l.quantity + 1 } : l));
       return [
         ...prev,
-        { key, menuItemId, categoryId, name, categoryName, priceType, priceLabel, unitPricePaise, quantity: 1, discountType: "FLAT", discountValueInput: "" },
+        {
+          key,
+          menuItemId,
+          categoryId,
+          name,
+          categoryName,
+          priceType,
+          priceLabel,
+          unitPricePaise: unitPricePaise + (addon?.pricePaise ?? 0),
+          quantity: 1,
+          addon: addon ? { id: addon.id, name: addon.name } : undefined,
+          discountType: "FLAT",
+          discountValueInput: "",
+        },
       ];
     });
+  }
+
+  // "Pick one" items (combos) ask which option — e.g. the cold drink — before going in the cart.
+  const [choosing, setChoosing] = useState<{ item: MenuItem; category: MenuCategory; priceType: PriceType; priceLabel: string; pricePaise: number } | null>(null);
+  function tapItem(item: MenuItem, category: MenuCategory, priceType: PriceType, priceLabel: string, pricePaise: number) {
+    if (item.addon_mode === "PICK_ONE" && item.addons.some((a) => a.active)) {
+      setChoosing({ item, category, priceType, priceLabel, pricePaise });
+      return;
+    }
+    addToCart(item.id, category.id, item.name, category.name, priceType, priceLabel, pricePaise);
   }
 
   function ruleAppliesTo(rule: DiscountRule, line: CartLine): boolean {
@@ -210,6 +236,7 @@ export function POS() {
         menuItemId: l.menuItemId,
         priceType: l.priceType,
         quantity: l.quantity,
+        addonIds: l.addon ? [l.addon.id] : undefined,
         specialInstructions: l.specialInstructions,
         discountType: l.discountType,
         discountValue: l.discountType === "PERCENTAGE" ? parseFloat(l.discountValueInput) || 0 : rupeesToPaise(parseFloat(l.discountValueInput) || 0),
@@ -354,13 +381,14 @@ export function POS() {
                   itemInCart ? "border-brand-400 ring-1 ring-brand-300" : "border-slate-200"
                 }`}
               >
-                <div className="font-medium text-sm text-slate-800 mb-2">{item.name}</div>
+                <div className={`font-medium text-sm text-slate-800 ${item.description ? "" : "mb-2"}`}>{item.name}</div>
+                {item.description && <div className="text-[11px] leading-snug text-slate-400 mb-2">{item.description}</div>}
                 {unavailable && <Badge tone="red">Unavailable</Badge>}
                 {!unavailable && (
                   <div className="space-y-1.5">
                     {half && (
                       <button
-                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "HALF", item.half_label, half.price_paise)}
+                        onClick={() => tapItem(item, currentCategory!, "HALF", item.half_label, half.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartHalf ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -371,7 +399,7 @@ export function POS() {
                     )}
                     {full && (
                       <button
-                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "FULL", item.full_label, full.price_paise)}
+                        onClick={() => tapItem(item, currentCategory!, "FULL", item.full_label, full.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartFull ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -382,7 +410,7 @@ export function POS() {
                     )}
                     {single && (
                       <button
-                        onClick={() => addToCart(item.id, currentCategory!.id, item.name, currentCategory!.name, "SINGLE", "Add", single.price_paise)}
+                        onClick={() => tapItem(item, currentCategory!, "SINGLE", "Add", single.price_paise)}
                         className={`tap-btn w-full flex items-center justify-between text-xs rounded px-2 py-1.5 transition-colors ${
                           inCartSingle ? "bg-brand-600 text-white" : "bg-slate-50"
                         }`}
@@ -469,6 +497,7 @@ export function POS() {
                   <div className="font-medium text-slate-800 truncate">
                     {line.name} <span className="text-slate-400 text-xs">({line.priceLabel})</span>
                   </div>
+                  {line.addon && <div className="text-xs text-brand-600 truncate">+ {line.addon.name}</div>}
                   <div className="text-xs text-slate-400">{formatPaise(line.unitPricePaise)} each</div>
                 </div>
                 <button onClick={() => updateQty(line.key, -1)} className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 active:bg-slate-300 active:scale-90 transition-transform duration-75 shrink-0 [touch-action:manipulation] select-none">
@@ -728,6 +757,32 @@ export function POS() {
         </div>
       </Modal>
       <ShareBillModal order={sharingOrder} onClose={() => setSharingOrder(null)} />
+
+      <Modal open={!!choosing} onClose={() => setChoosing(null)} title={choosing ? `${choosing.item.name} — choose one` : ""}>
+        {choosing && (
+          <div className="space-y-3">
+            {choosing.item.description && <p className="text-sm text-slate-500">{choosing.item.description}</p>}
+            <div className="grid grid-cols-2 gap-2">
+              {choosing.item.addons
+                .filter((a) => a.active)
+                .map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      const c = choosing;
+                      addToCart(c.item.id, c.category.id, c.item.name, c.category.name, c.priceType, c.priceLabel, c.pricePaise, { id: a.id, name: a.name, pricePaise: a.price_paise });
+                      setChoosing(null);
+                    }}
+                    className="tap-btn rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-800 hover:border-brand-400 hover:bg-brand-50"
+                  >
+                    {a.name}
+                    {a.price_paise > 0 && <span className="block text-xs text-slate-400">+{formatPaise(a.price_paise)}</span>}
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <InventoryMissingDialog
         open={!!inventoryMissingPrompt}
