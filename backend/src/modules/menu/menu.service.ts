@@ -11,6 +11,37 @@ export interface MenuItemAddonRow {
   name: string;
   price_paise: number;
   active: boolean;
+  /** Only on PICK_ONE items (combo drinks): false when the matching Beverages item is out of stock. */
+  in_stock?: boolean;
+}
+
+/** "Coca-Cola" / "Coco Cola" / "coca cola" → "cocacola", so a combo's drink option can be matched to its Beverages item. */
+function drinkKey(name: string): string {
+  const k = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return k === "cococola" ? "cocacola" : k;
+}
+
+/**
+ * Stock of each drink, read from the Beverages category: true if any
+ * Beverages item with that name is ACTIVE, false if they're all out of
+ * stock/discontinued. Names not in Beverages at all are left out (unknown =
+ * treated as available).
+ */
+export async function getDrinkStock(): Promise<Map<string, boolean>> {
+  const stock = new Map<string, boolean>();
+  const cats = await MenuCategory.find({ name: /beverage/i });
+  if (cats.length === 0) return stock;
+  const items = await MenuItem.find({ categoryId: { $in: cats.map((c) => c._id) } });
+  for (const i of items) {
+    const key = drinkKey(i.name);
+    stock.set(key, (stock.get(key) ?? false) || i.status === "ACTIVE");
+  }
+  return stock;
+}
+
+/** Whether a PICK_ONE option (e.g. "Pepsi" on a combo) is in stock, per getDrinkStock. */
+export function optionInStock(stock: Map<string, boolean>, optionName: string): boolean {
+  return stock.get(drinkKey(optionName)) ?? true;
 }
 
 export interface MenuItemRow {
@@ -130,7 +161,12 @@ export async function listMenu() {
     list.push({ price_type: p.priceType, price_paise: p.pricePaise });
     pricesByItem.set(p.menuItemId, list);
   }
-  const rows = items.map((i) => ({ ...toItemRow(i), prices: pricesByItem.get(i._id) ?? [] }));
+  const drinkStock = items.some((i) => i.addonMode === "PICK_ONE") ? await getDrinkStock() : new Map<string, boolean>();
+  const rows = items.map((i) => {
+    const row = toItemRow(i);
+    if (row.addon_mode === "PICK_ONE") row.addons = row.addons.map((a) => ({ ...a, in_stock: optionInStock(drinkStock, a.name) }));
+    return { ...row, prices: pricesByItem.get(i._id) ?? [] };
+  });
 
   return categories.map((cat) => ({
     id: cat._id,

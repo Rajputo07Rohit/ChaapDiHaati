@@ -768,18 +768,31 @@ export function POS() {
                 .map((a) => (
                   <button
                     key={a.id}
+                    disabled={a.in_stock === false}
                     onClick={() => {
                       const c = choosing;
                       addToCart(c.item.id, c.category.id, c.item.name, c.category.name, c.priceType, c.priceLabel, c.pricePaise, { id: a.id, name: a.name, pricePaise: a.price_paise });
                       setChoosing(null);
                     }}
-                    className="tap-btn rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-800 hover:border-brand-400 hover:bg-brand-50"
+                    className="tap-btn rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-medium text-slate-800 hover:border-brand-400 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:bg-slate-50"
                   >
                     {a.name}
+                    {a.in_stock === false && <span className="block text-xs text-rose-500">Out of stock</span>}
                     {a.price_paise > 0 && <span className="block text-xs text-slate-400">+{formatPaise(a.price_paise)}</span>}
                   </button>
                 ))}
             </div>
+            <button
+              onClick={() => {
+                const c = choosing;
+                addToCart(c.item.id, c.category.id, c.item.name, c.category.name, c.priceType, c.priceLabel, c.pricePaise);
+                setChoosing(null);
+              }}
+              className="tap-btn w-full rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-sm text-slate-600 hover:border-brand-400"
+            >
+              Any available drink
+            </button>
+            <p className="text-xs text-slate-400">* Out-of-stock drinks come from the Beverages menu. Serve whichever cold drink is available.</p>
           </div>
         )}
       </Modal>

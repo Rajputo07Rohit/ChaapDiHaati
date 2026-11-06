@@ -6,7 +6,7 @@ import { recordAudit } from "../../utils/audit";
 import { withTransaction } from "../../db/mongoose";
 import { ConflictError, ForbiddenError, InventoryMissingError, NotFoundError, ValidationError } from "../../utils/errors";
 import { assertBusinessDateWritable } from "../../utils/businessDate";
-import { getCurrentPrice, getMenuItemOrThrow } from "../menu/menu.service";
+import { getCurrentPrice, getDrinkStock, getMenuItemOrThrow, optionInStock } from "../menu/menu.service";
 import { getEffectiveRecipeVersion, getRecipeItems } from "../recipes/recipe.service";
 import { recordMovement, getInventoryItemOrThrow } from "../inventory/inventory.service";
 import { recordCashTransaction } from "../cash/cash.service";
@@ -362,9 +362,19 @@ export async function resolveOrderItems(items: OrderItemInput[], opts: { require
       }
 
       if (menuItem.addon_mode === "PICK_ONE" && menuItem.addons.some((a) => a.active)) {
-        const picked = new Set(item.addonIds ?? []).size;
-        if (picked > 1) throw new ValidationError(`Choose only one option for ${menuItem.name}.`);
-        if (picked === 0 && opts.requireChoice) throw new ValidationError(`Please choose an option for ${menuItem.name}.`);
+        const pickedIds = [...new Set(item.addonIds ?? [])];
+        if (pickedIds.length > 1) throw new ValidationError(`Choose only one option for ${menuItem.name}.`);
+        if (opts.requireChoice) {
+          // Customers pick from what's in stock (per the Beverages category). If nothing is,
+          // the combo can still be ordered — staff serve whichever drink is available.
+          const stock = await getDrinkStock();
+          const inStock = menuItem.addons.filter((a) => a.active && optionInStock(stock, a.name));
+          const picked = menuItem.addons.find((a) => a.id === pickedIds[0]);
+          if (picked && !optionInStock(stock, picked.name)) {
+            throw new ValidationError(`${picked.name} is out of stock right now — please choose another drink for ${menuItem.name}.`);
+          }
+          if (!picked && inStock.length > 0) throw new ValidationError(`Please choose an option for ${menuItem.name}.`);
+        }
       }
 
       const addons: ResolvedOrderItemAddon[] = [];

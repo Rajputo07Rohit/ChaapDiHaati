@@ -21,6 +21,8 @@ export interface MenuItemAddon {
   name: string;
   price_paise: number;
   active: boolean;
+  /** Combo drinks: false when that drink is out of stock in Beverages. */
+  in_stock?: boolean;
 }
 
 export interface MenuItem {
