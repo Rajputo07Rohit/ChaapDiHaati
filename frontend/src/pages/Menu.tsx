@@ -390,7 +390,7 @@ function EditItemModal({ item, onClose, onSaved }: { item: MenuItem | null; onCl
         </div>
         <div>
           <label className="text-xs font-medium text-slate-500">Description (shown under the name, e.g. what a combo includes)</label>
-          <Input value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="Half Plate Punjabi Chaap + 1 Rumali Roti + 1 Cold Drink" className="w-full" />
+          <Input value={description} maxLength={200} onChange={(e) => setDescription(e.target.value)} placeholder="Half Plate Punjabi Chaap + 2 Rumali Roti + 1 Cold Drink" className="w-full" />
         </div>
         <label className="flex items-start gap-2 text-sm text-slate-700">
           <input type="checkbox" checked={pickOne} onChange={(e) => setPickOne(e.target.checked)} className="mt-0.5" />

@@ -1,6 +1,6 @@
 /**
  * "Student Special Combo" offer (BIT Mesra banner): four chaap combos, each
- * Half Plate Chaap + 1 Rumali Roti + 1 ₹20 Cold Drink. The drink is a
+ * Half Plate Chaap + 2 Rumali Roti + 1 ₹20 Cold Drink. The drink is a
  * PICK_ONE add-on (₹0) so the customer app makes the customer choose exactly
  * one, the POS asks staff which one, and the kitchen sees it on the ticket.
  *
@@ -28,13 +28,13 @@ import { newId } from "../../utils/ids";
 const COMBO_DRINKS = ["Coca-Cola", "Pepsi", "Sprite", "Thums Up", "Mountain Dew"];
 
 const COMBOS: { name: string; rupees: number; description: string; image: string }[] = [
-  { name: "Punjabi Chaap Combo", rupees: 139, description: "Half Plate Punjabi Chaap + 1 Rumali Roti + 1 Cold Drink", image: "combo-punjabi-chaap" },
-  { name: "Malai Chaap Combo", rupees: 139, description: "Half Plate Malai Chaap + 1 Rumali Roti + 1 Cold Drink", image: "combo-malai-chaap" },
-  { name: "Tikhi Titli Chaap Combo", rupees: 159, description: "Half Plate Tikhi Titli Chaap + 1 Rumali Roti + 1 Cold Drink", image: "combo-tikhi-titli-chaap" },
+  { name: "Punjabi Chaap Combo", rupees: 139, description: "Half Plate Punjabi Chaap + 2 Rumali Roti + 1 Cold Drink", image: "combo-punjabi-chaap" },
+  { name: "Malai Chaap Combo", rupees: 139, description: "Half Plate Malai Chaap + 2 Rumali Roti + 1 Cold Drink", image: "combo-malai-chaap" },
+  { name: "Tikhi Titli Chaap Combo", rupees: 159, description: "Half Plate Tikhi Titli Chaap + 2 Rumali Roti + 1 Cold Drink", image: "combo-tikhi-titli-chaap" },
   {
     name: "Veg Chicken Tikka Chaap Combo",
     rupees: 159,
-    description: "Half Plate Veg Chicken Tikka Chaap + 1 Rumali Roti + 1 Cold Drink",
+    description: "Half Plate Veg Chicken Tikka Chaap + 2 Rumali Roti + 1 Cold Drink",
     image: "combo-veg-chicken-tikka-chaap",
   },
 ];
